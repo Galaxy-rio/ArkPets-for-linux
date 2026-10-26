@@ -1,0 +1,25 @@
+# Generated with packaging/release.sh; the adjacent source archive is required.
+pkgname=arkpets-linux
+pkgver=0.9.0
+pkgrel=1
+pkgdesc='Material desktop-pet manager and transparent Hyprland layer-shell renderer'
+arch=('x86_64')
+license=('GPL-3.0-or-later' 'LGPL-3.0-or-later' 'Apache-2.0' 'custom:Spine-Runtimes')
+depends=('glibc' 'gcc-libs' 'qt6-base>=6.10' 'qt6-declarative>=6.10' 'qt6-wayland' 'qt6-svg'
+         'noto-fonts-cjk' 'gtk4>=4.12' 'gtk4-layer-shell' 'libepoxy' 'hyprland>=0.55')
+optdepends=('matugen: read an existing system Material color palette')
+makedepends=('cmake' 'pkgconf')
+options=('!debug')
+source=("arkpets-linux-${pkgver}.tar.gz")
+sha256sums=('@SOURCE_SHA256@')
+
+build() {
+    cmake -S "arkpets-linux-${pkgver}" -B build \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_INSTALL_LIBEXECDIR=libexec -DBUILD_TESTING=OFF
+    cmake --build build --parallel 4
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+}

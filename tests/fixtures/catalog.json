@@ -1,0 +1,106 @@
+{
+  "storageDirectory": {
+    "Operator": "models",
+    "Enemy": "models_enemies",
+    "DynIllust": "models_illust"
+  },
+  "sortTags": {
+    "DynIllust": "动态立绘",
+    "Operator": "干员",
+    "Skinned": "时装",
+    "Special": "异格",
+    "Enemy": "敌人",
+    "EnemyNormal": "普通敌人",
+    "EnemyElite": "精英敌人",
+    "EnemyBoss": "领袖敌人",
+    "Rarity_1": "一星",
+    "Rarity_2": "二星",
+    "Rarity_3": "三星",
+    "Rarity_4": "四星",
+    "Rarity_5": "五星",
+    "Rarity_6": "六星"
+  },
+  "gameDataVersionDescription": "Producer: ArkUnpacker 5\nDate: 2026-09-29\n",
+  "gameDataServerRegion": "zh_CN",
+  "data": {
+    "2025_shu": {
+      "assetId": "build_char_2025_shu",
+      "type": "Operator",
+      "style": "BuildingDefault",
+      "name": "黍",
+      "appellation": "Shu",
+      "skinGroupId": "DEFAULT",
+      "skinGroupName": "默认服装",
+      "sortTags": [
+        "Operator",
+        "Rarity_6"
+      ],
+      "assetList": {
+        ".atlas": "build_char_2025_shu.atlas",
+        ".png": "build_char_2025_shu.png",
+        ".skel": "build_char_2025_shu.skel"
+      }
+    },
+    "2025_shu_nian#11": {
+      "assetId": "build_char_2025_shu_nian#11",
+      "type": "Operator",
+      "style": "BuildingSkin",
+      "name": "黍",
+      "appellation": "Shu",
+      "skinGroupId": "2025#nian",
+      "skinGroupName": "0011制造/XI",
+      "sortTags": [
+        "Operator",
+        "Rarity_6",
+        "Skinned"
+      ],
+      "assetList": {
+        ".atlas": "build_char_2025_shu_nian#11.atlas",
+        ".png": "build_char_2025_shu_nian#11.png",
+        ".skel": "build_char_2025_shu_nian#11.skel"
+      }
+    },
+    "dyn_illust_2025_shu": {
+      "assetId": "dyn_illust_2025_shu",
+      "type": "DynIllust",
+      "style": null,
+      "name": "黍",
+      "appellation": "Shu",
+      "skinGroupId": "DEFAULT",
+      "skinGroupName": "默认服装",
+      "sortTags": [
+        "Operator",
+        "Rarity_6",
+        "DynIllust"
+      ],
+      "assetList": {
+        ".atlas": "dyn_illust_char_2025_shu.atlas",
+        ".png": "dyn_illust_char_2025_shu.png",
+        ".skel": "dyn_illust_char_2025_shu.skel"
+      }
+    },
+    "285_medic2": {
+      "assetId": "build_char_285_medic2",
+      "type": "Operator",
+      "style": "BuildingDefault",
+      "name": "Lancet-2",
+      "appellation": "Lancet-2",
+      "skinGroupId": "DEFAULT",
+      "skinGroupName": "默认服装",
+      "sortTags": [
+        "Operator",
+        "Rarity_1"
+      ],
+      "assetList": {
+        ".atlas": "build_char_285_medic2.atlas",
+        ".png": "build_char_285_medic2.png",
+        ".skel": "build_char_285_medic2.skel"
+      }
+    }
+  },
+  "arkPetsCompatibility": [
+    2,
+    2,
+    0
+  ]
+}

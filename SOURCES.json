@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-26",
+  "ark_pets_reference": {
+    "repository": "https://github.com/isHarryh/Ark-Pets",
+    "revision": "d82d47ba4858adc91befd1e77a3abe6f2ce6a4f8"
+  },
+  "spine_runtime": {
+    "repository": "https://github.com/EsotericSoftware/spine-runtimes",
+    "revision": "8b4844bd4b193ba9e54487ed397a777993cbad56",
+    "branch": "3.8",
+    "paths": [
+      "spine-c/spine-c/include",
+      "spine-c/spine-c/src",
+      "spine-c/LICENSE"
+    ]
+  },
+  "version": "0.9.0",
+  "material_components": {
+    "repository": "https://github.com/sudoevolve/material-components-qml",
+    "revision": "900a537824812bb592a761a0fd0b301422bd1a79",
+    "path": "vendor/material-components-qml",
+    "qml_module": "md3.Core",
+    "license": "LGPL-3.0-or-later; Google color utilities and Material Icons: Apache-2.0",
+    "local_changes": "vendor/material-components-qml/NOTICE.md",
+    "text_font": "System font fallback (Noto Sans CJK SC on Arch)"
+  },
+  "model_catalog": {
+    "repository": "https://github.com/isHarryh/Ark-Models",
+    "index": "https://raw.githubusercontent.com/isHarryh/Ark-Models/main/models_data.json",
+    "assets_bundled": false,
+    "download_metadata": "<data-directory>/models/<id>/complete.json"
+  },
+  "test_protocol": {
+    "repository": "https://gitlab.freedesktop.org/wlroots/wlr-protocols",
+    "path": "unstable/wlr-virtual-pointer-unstable-v1.xml",
+    "license": "MIT",
+    "installed": false
+  }
+}

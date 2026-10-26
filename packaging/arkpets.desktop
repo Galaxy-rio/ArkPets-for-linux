@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=ArkPets
+Name[zh_CN]=ArkPets
+Comment=Animated Arknights companions for Hyprland
+Comment[zh_CN]=支持模型下载、拖动和自动活动的明日方舟桌宠
+Exec=arkpets
+Icon=arkpets
+Terminal=false
+Categories=Game;
+StartupNotify=true
+StartupWMClass=arkpets
