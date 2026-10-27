@@ -21,9 +21,12 @@ Window {
     readonly property string currentPetId: currentPage.startsWith("pet:") ? currentPage.slice(4) : ""
     property string initialSearch: ""
     property string kindFilter: "Operator"
-    property int draftSize: 280
+    property real draftScale: 1
     property int draftFps: 30
     property bool draftAutoActivity: false
+    property bool draftGravity: false
+    property bool draftWindowEdges: false
+    property bool draftTrackMovingWindows: false
     property bool draftClickThrough: false
     property bool draftFlip: false
     property string draftMonitor: ""
@@ -58,26 +61,30 @@ Window {
 
     function loadPreferences() {
         let p = backend.preferences
-        draftSize = p.size; draftFps = p.fps
+        draftScale = p.scale; draftFps = p.fps
         draftAutoActivity = !!p.autoActivity
+        draftGravity = !!p.gravity
+        draftWindowEdges = !!p.windowEdges
+        draftTrackMovingWindows = !!p.trackMovingWindows
         draftClickThrough = p.clickThrough; draftFlip = p.flip
         draftMonitor = p.monitor; draftLayer = p.layer
-        sizeField.text = String(draftSize); fpsField.text = String(draftFps)
+        scaleField.text = String(draftScale); fpsField.text = String(draftFps)
     }
     function applyFilter() {
         backend.setFilter(search.text, currentPage === "downloaded" ? "" : kindFilter,
                           currentPage === "downloaded")
     }
     function saveSettings() {
-        sizeField.commit(); fpsField.commit()
-        backend.savePreferences({size: draftSize, fps: draftFps, autoActivity: draftAutoActivity,
+        scaleField.commit(); fpsField.commit()
+        backend.savePreferences({scale: draftScale, fps: draftFps, autoActivity: draftAutoActivity,
+                                 gravity: draftGravity, windowEdges: draftWindowEdges, trackMovingWindows: draftTrackMovingWindows,
                                  monitor: draftMonitor, layer: draftLayer,
                                  clickThrough: draftClickThrough, flip: draftFlip})
         if (!backend.error) {feedback = "已保存"; feedbackTimer.restart()}
     }
     onCurrentPageChanged: {
         feedback = ""
-        if (currentPage === "model-settings" && sizeField) loadPreferences()
+        if (currentPage === "model-settings" && scaleField) loadPreferences()
         else if (search && (currentPage === "library" || currentPage === "downloaded")) applyFilter()
     }
     Component.onCompleted: {
@@ -334,13 +341,18 @@ Window {
         }
 
         Flickable {
-            id: settingsScroll
+            id: settingsScroll; objectName: "generalSettingsScroll"
             visible: root.currentPage === "model-settings"
             Layout.fillWidth: true; Layout.fillHeight: true
             clip: true
             contentWidth: width
             contentHeight: settingsContent.implicitHeight
             boundsBehavior: Flickable.StopAtBounds
+            ListWheelHandler {
+                objectName: "generalSettingsWheelHandler"
+                parent: settingsScroll; anchors.fill: parent; z: 1
+                target: settingsScroll
+            }
             MD.ScrollBar {objectName: "settingsScrollBar"; parent: settingsScroll; target: settingsScroll; anchors.right: parent.right; height: parent.height; z: 2}
             ColumnLayout {
                 id: settingsContent
@@ -349,22 +361,20 @@ Window {
                 MdText {role: "titleMedium"; text: "显示"; color: MD.Theme.color.primary}
                 RowLayout {
                     Layout.fillWidth: true; spacing: 24
-                    MdText {text: "人物高度"; role: "bodyLarge"; Layout.preferredWidth: 112}
+                    MdText {text: "缩放倍率"; role: "bodyLarge"; Layout.preferredWidth: 112}
                     MD.Slider {
-                        id: sizeSlider; objectName: "sizeSlider"
+                        id: scaleSlider; objectName: "scaleSlider"
                         Layout.fillWidth: true
-                        from: 96; to: 800; stepSize: 8
-                        Binding {target: sizeSlider; property: "value"; value: root.draftSize}
+                        from: 0.25; to: 2.5; stepSize: 0.05
+                        Binding {target: scaleSlider; property: "value"; value: root.draftScale}
                         onPressedChanged: if (pressed) forceActiveFocus()
-                        onMoved: root.draftSize = Math.round(value)
+                        onMoved: root.draftScale = Math.round(value * 100) / 100
                     }
-                    NumberField {
-                        id: sizeField; objectName: "sizeField"
+                    MultiplierField {
+                        id: scaleField; objectName: "scaleField"
                         Layout.preferredWidth: 128
-                        label: "逻辑像素"
-                        from: 96; to: 800
-                        Binding {target: sizeField; property: "value"; value: root.draftSize}
-                        onValueModified: function(value) {root.draftSize = value}
+                        Binding {target: scaleField; property: "value"; value: root.draftScale}
+                        onValueModified: function(value) {root.draftScale = value}
                     }
                 }
                 RowLayout {
@@ -453,6 +463,54 @@ Window {
                         Accessible.name: "水平翻转"
                         Binding {target: flipSwitch; property: "checked"; value: root.draftFlip}
                         onClicked: root.draftFlip = checked
+                    }
+                }
+                Rectangle {height: 1; Layout.fillWidth: true; Layout.topMargin: 4; Layout.bottomMargin: 4; color: MD.Theme.color.outlineVariant}
+                MdText {role: "titleMedium"; text: "重力与边框"; color: MD.Theme.color.primary}
+                RowLayout {
+                    Layout.fillWidth: true; Layout.preferredHeight: 48
+                    ColumnLayout {
+                        Layout.fillWidth: true; spacing: 4
+                        MdText {text: "重力"; role: "bodyLarge"}
+                        MdText {text: "松开角色后下落"; color: MD.Theme.color.onSurfaceVariantColor}
+                    }
+                    Item {Layout.fillWidth: true}
+                    MD.Switch {
+                        id: gravitySwitch; objectName: "gravitySwitch"; Accessible.name: "重力"
+                        Layout.preferredWidth: 52; Layout.maximumWidth: 52; Layout.preferredHeight: 48
+                        Binding {target: gravitySwitch; property: "checked"; value: root.draftGravity}
+                        onClicked: {root.draftGravity = checked; if (!checked) root.draftWindowEdges = false}
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true; Layout.preferredHeight: 48
+                    ColumnLayout {
+                        Layout.fillWidth: true; spacing: 4
+                        MdText {text: "检测屏幕边框"; role: "bodyLarge"}
+                        MdText {text: "站在窗口上沿或内部下沿"; color: MD.Theme.color.onSurfaceVariantColor}
+                    }
+                    Item {Layout.fillWidth: true}
+                    MD.Switch {
+                        id: windowEdgesSwitch; objectName: "windowEdgesSwitch"; Accessible.name: "检测屏幕边框"
+                        Layout.preferredWidth: 52; Layout.maximumWidth: 52; Layout.preferredHeight: 48
+                        Binding {target: windowEdgesSwitch; property: "checked"; value: root.draftWindowEdges}
+                        onClicked: {root.draftWindowEdges = checked; if (checked) root.draftGravity = true}
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true; Layout.preferredHeight: 48
+                    ColumnLayout {
+                        Layout.fillWidth: true; spacing: 4
+                        MdText {text: "检测窗口移动"; role: "bodyLarge"}
+                        MdText {text: "跟随鼠标拖动的窗口"; color: MD.Theme.color.onSurfaceVariantColor}
+                    }
+                    Item {Layout.fillWidth: true}
+                    MD.Switch {
+                        id: trackMovingWindowsSwitch; objectName: "trackMovingWindowsSwitch"; Accessible.name: "检测窗口移动"
+                        enabled: root.draftWindowEdges
+                        Layout.preferredWidth: 52; Layout.maximumWidth: 52; Layout.preferredHeight: 48
+                        Binding {target: trackMovingWindowsSwitch; property: "checked"; value: root.draftTrackMovingWindows}
+                        onClicked: root.draftTrackMovingWindows = checked
                     }
                 }
             }

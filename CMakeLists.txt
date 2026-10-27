@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(arkpets_linux VERSION 0.9.0 LANGUAGES C CXX)
+project(arkpets_linux VERSION 0.9.6 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(PkgConfig REQUIRED)
@@ -27,7 +27,8 @@ set_target_properties(arkpets-renderer PROPERTIES AUTOMOC OFF)
 target_link_libraries(arkpets-renderer PRIVATE spine PkgConfig::NATIVE)
 target_compile_options(arkpets-renderer PRIVATE -Wall -Wextra -Wpedantic)
 add_library(arkpets-backend STATIC src/gui/catalog.cpp src/gui/catalog.h src/gui/controller.cpp src/gui/controller.h
-    src/gui/panelsettings.cpp src/gui/panelsettings.h src/gui/listwheelhandler.cpp src/gui/listwheelhandler.h)
+    src/gui/panelsettings.cpp src/gui/panelsettings.h src/gui/listwheelhandler.cpp src/gui/listwheelhandler.h
+    src/gui/windowtracker.cpp src/gui/windowtracker.h)
 target_link_libraries(arkpets-backend PUBLIC Qt6::Core Qt6::Gui Qt6::Network Qt6::Quick)
 target_include_directories(arkpets-backend PUBLIC src/gui)
 target_compile_options(arkpets-backend PRIVATE -Wall -Wextra -Wpedantic)

@@ -46,7 +46,7 @@ base = [binary, "--model", str(opts.model.resolve())]
 animations = subprocess.check_output(base + ["--list-animations"], text=True)
 assert "Relax" in animations
 for invalid in [["--animation", "does-not-exist"], ["--fps", "0"],
-                ["--size", "nan"], ["--duration", "nan"]]:
+                ["--scale", "nan"], ["--duration", "nan"]]:
     result = subprocess.run(base + invalid, capture_output=True, text=True)
     assert result.returncode != 0 and "错误:" in result.stderr
 
@@ -55,7 +55,7 @@ results = []
 for click_through in (False, True):
     folder = opts.output / ("click-through" if click_through else "draggable")
     folder.mkdir(exist_ok=True)
-    command = base + ["--size", "256", "--duration", "2", "--capture-dir", str(folder.resolve())]
+    command = base + ["--scale", "0.64", "--duration", "2", "--capture-dir", str(folder.resolve())]
     if opts.monitor:
         command += ["--monitor", opts.monitor]
     if click_through:

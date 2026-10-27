@@ -65,7 +65,7 @@ width = round((monitor["height"] if monitor["transform"] % 2 else monitor["width
 original_cursor = hypr("cursorpos")
 focus = hypr("activewindow").get("address")
 base = [str(ROOT/"bin/arkpets-renderer"), "--model", str(args.model.resolve()),
-        "--size", "344", "--monitor", args.monitor, "--auto-activity", "--activity-seed", "0"]
+        "--scale", "0.86", "--monitor", args.monitor, "--auto-activity", "--activity-seed", "0"]
 report = {"monitor": args.monitor, "seed": 0}
 evaluate('if _G.arkpets_activity_test then _G.arkpets_activity_test:set_enabled(true) '
          'else _G.arkpets_activity_test=hl.layer_rule({name="arkpets-activity-test",'

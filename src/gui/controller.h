@@ -1,6 +1,7 @@
 #pragma once
 #include "catalog.h"
 #include "panelsettings.h"
+#include "windowtracker.h"
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QProcess>
@@ -86,6 +87,7 @@ private:
     CatalogModel m_catalog;
     CatalogFilter m_filter;
     QNetworkAccessManager m_network;
+    WindowTracker m_windowTracker;
     QNetworkReply* m_reply = nullptr;
     QUrl m_base;
     bool m_busy = false, m_cancelled = false, m_destroying = false, m_ruleApplied = false;
@@ -102,6 +104,8 @@ private:
         bool ready = false, stopping = false, resettingPosition = false;
         QByteArray output, diagnostics;
         QString error;
+        QString monitor;
+        bool windowEdges = false;
     };
     std::map<QString, std::unique_ptr<PetSession>> m_pets;
     QMap<QString, QStringList> m_animationCache;
@@ -121,6 +125,7 @@ private:
     bool isRunning(const QString& id) const;
     bool syncSettings();
     void notifyPets();
+    void sendWindowEdges();
     PetSession& session(const QString& id);
     void launch(const QString& id);
     void restartPet(const QString& id);

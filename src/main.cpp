@@ -20,11 +20,13 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <sstream>
 #include <regex>
 #include <memory>
 #include "activity.h"
 #include "viewport.h"
+#include "gravity.h"
 
 namespace fs = std::filesystem;
 // The runtime's default file reader; avoid importing extension.h's global math macros.
@@ -56,9 +58,10 @@ extern "C" char* _spUtil_readFile(const char* path, int* length) { return _spRea
 struct Options {
     fs::path model, capture;
     std::string animation = "Relax", monitor, layer = "top", ns = "arkpets-hyprland";
-    int size = 320, fps = 30, right = 64, bottom = 40;
-    double duration = 0;
+    int fps = 30, right = 64, bottom = 40;
+    double scale = 1, duration = 0;
     bool list = false, flip = false, straightAlpha = false, clickThrough = false, autoActivity = false;
+    bool gravity = false, windowEdges = false;
     std::optional<std::uint32_t> activitySeed, interactionSeed;
 };
 
@@ -102,10 +105,15 @@ static Options arguments(int argc, char** argv) {
         else if (key == "--monitor") o.monitor = value();
         else if (key == "--layer") o.layer = value();
         else if (key == "--namespace") o.ns = value();
-        else if (key == "--size") o.size = integer(value(), 16, 2048);
+        else if (key == "--scale") {
+            std::string v = value(); size_t used = 0;
+            o.scale = std::stod(v, &used);
+            if (used != v.size() || !std::isfinite(o.scale) || o.scale < .0625 || o.scale > 6.25)
+                throw std::runtime_error("scale 必须是 0.0625 到 6.25 之间的倍率");
+        }
         else if (key == "--fps") o.fps = integer(value(), 1, 120);
-        else if (key == "--right") o.right = integer(value(), 0, 20000);
-        else if (key == "--bottom") o.bottom = integer(value(), 0, 20000);
+        else if (key == "--right") o.right = integer(value(), -20000, 20000);
+        else if (key == "--bottom") o.bottom = integer(value(), -20000, 20000);
         else if (key == "--duration") {
             std::string v = value(); size_t used = 0;
             o.duration = std::stod(v, &used);
@@ -118,6 +126,8 @@ static Options arguments(int argc, char** argv) {
         else if (key == "--straight-alpha") o.straightAlpha = true;
         else if (key == "--click-through") o.clickThrough = true;
         else if (key == "--auto-activity") o.autoActivity = true;
+        else if (key == "--gravity") o.gravity = true;
+        else if (key == "--window-edges") { o.windowEdges = true; o.gravity = true; }
         else if (key == "--activity-seed") o.activitySeed = integer(value(), 0, std::numeric_limits<int>::max());
         else if (key == "--interaction-seed") o.interactionSeed = integer(value(), 0, std::numeric_limits<int>::max());
         else if (key == "--help") {
@@ -127,12 +137,14 @@ static Options arguments(int argc, char** argv) {
                 "  --list-animations    列出模型的动作后退出，不需要图形会话\n"
                 "  --monitor NAME       显示器接口名，例如 DP-4\n"
                 "  --layer top|bottom|overlay  默认 top；bottom 在普通窗口后面\n"
-                "  --size 320           Relax 基准人物高度，单位为逻辑像素，支持 HiDPI\n"
+                "  --scale 1            原始模型缩放倍率，1 单位对应 1 逻辑像素，支持 HiDPI\n"
                 "  --right 64 --bottom 40     距离屏幕右/下边缘的逻辑像素\n"
                 "  --fps 30 --flip       帧率 / 水平翻转\n"
                 "  --straight-alpha     仅用于不是 PMA 的旧纹理；Ark-Models 默认 PMA\n"
                 "  --click-through      鼠标穿透；默认左键点击互动、按住拖动\n"
                 "  --auto-activity      自动走动，随机切换待机、坐下和睡觉\n"
+                "  --gravity            启用重力，松开角色后落到支撑面\n"
+                "  --window-edges       接收管理进程提供的窗口边缘（标准输入），同时开启重力\n"
                 "  --activity-seed N    固定随机种子，用于复现活动测试\n"
                 "  --interaction-seed N 固定点击互动随机种子，用于复现测试\n"
                 "  --duration SECONDS    自动退出，适合验证\n"
@@ -212,8 +224,8 @@ public:
     spAnimationStateData* stateData = nullptr;
     spAnimationState* state = nullptr;
     spSkeletonClipping* clip = nullptr;
-    ModelBounds bounds, referenceBounds;
-    std::string currentAnimation, referenceAnimation, interactionAnimation, specialAnimation;
+    ModelBounds bounds, movementBounds;
+    std::string currentAnimation, interactionAnimation, specialAnimation;
     bool currentLoop = true;
     std::vector<std::string> animationNames() const {
         std::vector<std::string> names;
@@ -256,7 +268,8 @@ public:
         clip = spSkeletonClipping_create();
         const auto names = animationNames();
         const auto plan = activityPlan(names, o.animation);
-        referenceAnimation = plan.front().animation;
+        const auto defaultAnimation = findAnimation(names, {"default"});
+        ModelBounds idleBounds;
         interactionAnimation = findAnimation(names, {"interact"});
         specialAnimation = findAnimation(names, {"special"});
         std::vector<std::string> boundsAnimations{o.animation};
@@ -269,6 +282,7 @@ public:
         for (const auto& action : plan) includeAnimation(action.animation);
         includeAnimation(interactionAnimation);
         includeAnimation(specialAnimation);
+        includeAnimation(defaultAnimation);
         for (const auto& name : boundsAnimations) {
             auto* sampled = spSkeletonData_findAnimation(data, name.c_str());
             spAnimationState_clearTracks(state);
@@ -289,10 +303,14 @@ public:
                 }
             }
             bounds.include(sampledBounds);
-            if (name == referenceAnimation) referenceBounds = sampledBounds;
+            if (name == defaultAnimation) movementBounds = sampledBounds;
+            if (name == plan.front().animation) idleBounds = sampledBounds;
         }
-        if (!bounds.valid() || !referenceBounds.valid())
+        if (!bounds.valid())
             throw std::runtime_error("模型没有可见的绘制内容");
+        // Some exports omit Default or leave it empty. Prefer the idle pose
+        // before falling back to the only drawable bounds available.
+        if (!movementBounds.valid()) movementBounds = idleBounds.valid() ? idleBounds : bounds;
         spAnimationState_clearTracks(state);
         stateData->defaultMix = 0.18f;
         bounds.includeMirror();
@@ -352,11 +370,79 @@ public:
     cairo_region_t* inputRegion = nullptr;
     std::unique_ptr<ActivityDirector> activity;
     std::unique_ptr<ModelViewport> viewport;
+    GravityBody body;
+    std::vector<StandingEdge> standingEdges;
+    std::string edgeInput;
+    unsigned long long edgesGeneration = 0;
+    gint64 lastEdgesAt = 0, lastPhysicsPublish = 0;
+    bool dropWindowSupport = false;
+    guint edgeWatch = 0;
 
     ~Pet() { if (inputRegion) cairo_region_destroy(inputRegion); }
 
     void publishPosition() {
         std::cout << "ARKPETS_POSITION " << o.right << ' ' << o.bottom << '\n' << std::flush;
+    }
+    MovementLimits movementLimits() const {
+        return viewport->movementLimits(model.movementBounds, screenWidth, screenHeight, model.skeleton->scaleX < 0);
+    }
+    double bodyCenterAtZero() const {
+        double center=(model.movementBounds.minX+model.movementBounds.maxX)/2.0;
+        if (model.skeleton->scaleX<0) center=-center;
+        return screenWidth-viewport->width+(center-viewport->minX)*viewport->scale;
+    }
+    double bodyFeetAtZero() const {
+        return screenHeight-(model.movementBounds.minY-viewport->minY)*viewport->scale;
+    }
+    MovementLimits walkingLimits() const {
+        auto limits=movementLimits();
+        if (o.gravity && body.grounded()) {
+            const double origin=bodyCenterAtZero();
+            limits.minRight=std::max(limits.minRight,static_cast<int>(std::ceil(origin-body.walkRight())));
+            limits.maxRight=std::min(limits.maxRight,static_cast<int>(std::floor(origin-body.walkLeft())));
+            if (limits.minRight>limits.maxRight) limits.minRight=limits.maxRight=static_cast<int>(std::lround(origin-body.x));
+        }
+        return limits;
+    }
+    void resetGravity() {
+        body.release(); body.x=bodyCenterAtZero()-o.right; body.y=bodyFeetAtZero()-o.bottom;
+    }
+    void readEdges() {
+        char buffer[8192]; ssize_t count;
+        while ((count=read(STDIN_FILENO,buffer,sizeof(buffer)))>0) edgeInput.append(buffer,static_cast<size_t>(count));
+        if (edgeInput.size()>1024*1024) { edgeInput.clear(); standingEdges.clear(); dropWindowSupport=true; return; }
+        for (size_t end;(end=edgeInput.find('\n'))!=std::string::npos;) {
+            unsigned long long generation=edgesGeneration;
+            if (readStandingEdges(edgeInput.substr(0,end),generation,standingEdges)) {
+                dropWindowSupport|=generation!=edgesGeneration;
+                edgesGeneration=generation; lastEdgesAt=g_get_monotonic_time();
+            }
+            edgeInput.erase(0,end+1);
+        }
+    }
+    void updateGravity(double elapsed) {
+        if (!o.gravity || dragging) return;
+        const auto now=g_get_monotonic_time();
+        if (o.windowEdges && now-lastEdgesAt>500000) {
+            if (!standingEdges.empty()) dropWindowSupport=true;
+            standingEdges.clear();
+        }
+        const auto limits=movementLimits();
+        const bool wasGrounded=body.grounded();
+        body.step(elapsed,standingEdges,screenWidth,bodyFeetAtZero()-limits.minBottom,dropWindowSupport);
+        dropWindowSupport=false;
+        const int right=std::clamp(static_cast<int>(std::lround(bodyCenterAtZero()-body.x)),limits.minRight,limits.maxRight);
+        const int bottom=std::clamp(static_cast<int>(std::lround(bodyFeetAtZero()-body.y)),limits.minBottom,limits.maxBottom);
+        const bool moved=right!=o.right || bottom!=o.bottom;
+        o.right=right; o.bottom=bottom;
+        if (activity) activity->setRight(bodyCenterAtZero()-body.x);
+        if (moved) {
+            gtk_layer_set_margin(window,GTK_LAYER_SHELL_EDGE_RIGHT,o.right);
+            gtk_layer_set_margin(window,GTK_LAYER_SHELL_EDGE_BOTTOM,o.bottom);
+        }
+        if ((!wasGrounded && body.grounded()) || (moved && now-lastPhysicsPublish>500000)) {
+            publishPosition(); lastPhysicsPublish=now;
+        }
     }
     void applyActivity(bool announce) {
         if (!activity) return;
@@ -370,15 +456,28 @@ public:
                       << '\n' << std::flush;
     }
     void updateActivity(double elapsed) {
-        if (!activity || dragging || interacting) return;
+        if (!activity || dragging || interacting || (o.gravity && !body.grounded())) return;
         bool wasWalking = activity->walking();
-        bool changed = activity->advance(elapsed, std::max(0, screenWidth-viewport->width), std::clamp(o.size*0.18, 24.0, 100.0));
+        auto limits = walkingLimits();
+        bool changed = activity->advance(elapsed, limits.maxRight, std::clamp(72.0*o.scale, 24.0, 100.0), limits.minRight);
+        const int previousRight=o.right;
+        o.right=static_cast<int>(std::lround(activity->right()));
+        const double center=bodyCenterAtZero()-activity->right();
+        const bool flipped=model.skeleton->scaleX<0;
+        applyActivity(false);
+        if (o.gravity && flipped!=(model.skeleton->scaleX<0))
+            activity->setRight(bodyCenterAtZero()-center);
+        // Turning mirrors an asymmetric Default pose. Recheck its new edges
+        // without resetting the activity timer or its walking direction.
+        limits = walkingLimits();
+        activity->advance(0, limits.maxRight, 0, limits.minRight);
         int right = static_cast<int>(std::lround(activity->right()));
-        if (right != o.right) {
-            o.right = right;
+        o.right=right;
+        if (right != previousRight) {
             gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_RIGHT, o.right);
         }
-        applyActivity(changed);
+        if (o.gravity) body.x=bodyCenterAtZero()-activity->right();
+        if (changed) applyActivity(true);
         if (changed && wasWalking) publishPosition();
     }
 
@@ -482,6 +581,7 @@ public:
             gtk_gesture_set_state(gesture, GTK_EVENT_SEQUENCE_DENIED); return;
         }
         dragging = true; dragRight = o.right; dragBottom = o.bottom;
+        if (o.gravity) resetGravity();
         if (activity) {activity->pause(); applyActivity(true);}
         startPointerX = cursor->first; startPointerY = cursor->second;
         cairo_rectangle_int_t rect{0, 0, viewport->width, viewport->height};
@@ -493,8 +593,10 @@ public:
         if (!dragging) return;
         auto cursor = pointerPosition();
         if (!cursor) return;
-        o.right = std::clamp(dragRight - int(cursor->first-startPointerX), 0, std::max(0, screenWidth-viewport->width));
-        o.bottom = std::clamp(dragBottom - int(cursor->second-startPointerY), 0, std::max(0, screenHeight-viewport->height));
+        const auto limits = movementLimits();
+        o.right = std::clamp(dragRight - int(cursor->first-startPointerX), limits.minRight, limits.maxRight);
+        o.bottom = std::clamp(dragBottom - int(cursor->second-startPointerY), limits.minBottom, limits.maxBottom);
+        if (o.gravity) resetGravity();
         gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_RIGHT, o.right);
         gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_BOTTOM, o.bottom);
         gtk_gl_area_queue_render(area);
@@ -597,6 +699,7 @@ void main() {
         if (!started) { started = previous = now; }
         // Preserve animation/activity speed even at low user-selected FPS.
         double elapsed = std::min(1.0, (now-previous)/1000000.0); previous = now;
+        updateGravity(elapsed);
         updateActivity(elapsed);
         model.advance(static_cast<float>(elapsed));
         finishInteraction();
@@ -684,17 +787,21 @@ void main() {
             screenWidth = rect.width; screenHeight = rect.height;
             if (const char* connector = gdk_monitor_get_connector(monitor)) o.monitor = connector;
         }
-        viewport = std::make_unique<ModelViewport>(model.bounds, model.referenceBounds.height(), o.size);
-        o.right = std::clamp(o.right, 0, std::max(0, screenWidth-viewport->width));
-        o.bottom = std::clamp(o.bottom, 0, std::max(0, screenHeight-viewport->height));
-        std::cout << "ARKPETS_LAYOUT " << model.referenceAnimation << '\t' << model.referenceBounds.height()
-                  << '\t' << viewport->scale << '\t' << viewport->width << '\t' << viewport->height
-                  << '\t' << o.size << '\n' << std::flush;
+        viewport = std::make_unique<ModelViewport>(model.bounds, o.scale);
+        std::cout << "ARKPETS_LAYOUT " << viewport->scale << '\t' << viewport->width
+                  << '\t' << viewport->height << '\n' << std::flush;
         if (o.autoActivity) {
             activity = std::make_unique<ActivityDirector>(activityPlan(model.animationNames(), o.animation), o.right,
                 o.activitySeed ? *o.activitySeed : std::random_device{}());
             applyActivity(true);
         }
+        const auto limits = movementLimits();
+        o.right = std::clamp(o.right, limits.minRight, limits.maxRight);
+        o.bottom = std::clamp(o.bottom, limits.minBottom, limits.maxBottom);
+        body.halfWidth=model.movementBounds.width()*viewport->scale/2;
+        body.height=model.movementBounds.height()*viewport->scale;
+        resetGravity();
+        if (activity) activity->advance(0, limits.maxRight, 0, limits.minRight);
         loop = g_main_loop_new(nullptr, FALSE);
         window = GTK_WINDOW(gtk_window_new());
         gtk_window_set_title(window, "ArkPets Linux");
@@ -770,6 +877,19 @@ void main() {
             auto& p = *static_cast<Pet*>(self); gtk_gl_area_queue_render(p.area); return G_SOURCE_CONTINUE;
         }, this);
         guint expiry = o.duration ? g_timeout_add(static_cast<guint>(o.duration*1000), quit, this) : 0;
+        int inputFlags=-1;
+        if (o.windowEdges) {
+            inputFlags=fcntl(STDIN_FILENO,F_GETFL,0);
+            if (inputFlags>=0 && fcntl(STDIN_FILENO,F_SETFL,inputFlags|O_NONBLOCK)==0)
+                edgeWatch=g_unix_fd_add(STDIN_FILENO,GIOCondition(G_IO_IN|G_IO_HUP|G_IO_ERR),
+                    +[](gint,GIOCondition condition,gpointer self)->gboolean {
+                        auto& p=*static_cast<Pet*>(self); p.readEdges();
+                        if (condition&(G_IO_HUP|G_IO_ERR)) {
+                            p.standingEdges.clear(); p.dropWindowSupport=true; p.edgeWatch=0; return G_SOURCE_REMOVE;
+                        }
+                        return G_SOURCE_CONTINUE;
+                    },this);
+        }
         std::cout << "模型: " << o.model << "，动作: " << o.animation << "，" << o.fps << " FPS\n"
                   << "Wayland layer-shell: " << o.ns << (o.clickThrough ? "；鼠标穿透" : "；可拖动")
                   << "；不占用键盘焦点\n" << std::flush;
@@ -778,6 +898,8 @@ void main() {
         publishPosition();
         g_source_remove(timer); g_source_remove(sigint); g_source_remove(sigterm);
         if (expiry) g_source_remove(expiry);
+        if (edgeWatch) g_source_remove(edgeWatch);
+        if (inputFlags>=0) fcntl(STDIN_FILENO,F_SETFL,inputFlags);
         gtk_window_destroy(window);
         g_main_loop_unref(loop);
         return failed ? 1 : 0;

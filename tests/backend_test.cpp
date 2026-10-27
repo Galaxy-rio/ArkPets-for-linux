@@ -11,6 +11,7 @@
 #include <QTest>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QLocalServer>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDir>
@@ -77,26 +78,310 @@ public:
 class BackendTest : public QObject {
     Q_OBJECT
 private slots:
-    void relaxHeightIndependentOfActionBounds() {
+    void gravityLandingFollowingAndWalkingBounds() {
+        const std::vector<StandingEdge> edges{{"a:top",100,500,200,100},{"a:bottom",100,500,500,100}};
+        GravityBody pet;pet.x=300;pet.y=120;pet.halfWidth=30;pet.height=100;
+        pet.step(1,edges,800,600);QVERIFY(pet.onWindow());QCOMPARE(pet.y,200.0);
+        QCOMPARE(pet.walkLeft(),130.0);QCOMPARE(pet.walkRight(),470.0);
+        auto moved=edges;for(auto& e:moved) {e.left+=20;e.right+=20;e.originX+=20;e.y+=10;}
+        pet.step(.05,moved,800,600);QCOMPARE(pet.x,320.0);QCOMPARE(pet.y,210.0);
+        // Losing one support can land on a lower edge, but never pop back onto
+        // the previous upper edge after a suspension between render frames.
+        pet.step(.1,moved,800,600,true);QVERIFY(!pet.grounded());QVERIFY(pet.y>210);
+        pet.step(1,moved,800,600);QCOMPARE(pet.y,510.0);QVERIFY(pet.onWindow());
+        pet.release();pet.y=300;pet.step(1,edges,800,600);QCOMPARE(pet.y,500.0);
+        pet.step(1,{},800,600);QCOMPARE(pet.y,600.0);QVERIFY(pet.grounded());QVERIFY(!pet.onWindow());
+        // Subpixel rounding of layer margins on a click must not drop through.
+        pet.release();pet.y=200.4;pet.step(.01,edges,800,600);QCOMPARE(pet.y,200.0);
+        // A narrow ledge cannot support the body, and high-speed falling cannot tunnel.
+        pet.release();pet.y=0;pet.step(1,{{"narrow",290,310,200,290}},800,600);QCOMPARE(pet.y,600.0);
+        ActivityDirector walk(activityPlan({"Default","Move"},"Default"),200,17);
+        for(int i=0;i<400;++i) {walk.advance(.1,470,100,130);QVERIFY(walk.right()>=130&&walk.right()<=470);}
+    }
+    void windowMotionPolicyAndVisibleEdges() {
+        auto monitor=[](int workspace=1) {return QJsonArray{QJsonObject{{"id",0},{"name","test"},{"x",100},{"y",200},
+            {"width",1600},{"height",1200},{"scale",2},{"transform",0},{"activeWorkspace",QJsonObject{{"id",workspace}}}}};};
+        auto window=[](const QString& id,int x,int y,int w=400,int h=300) {return QJsonObject{{"address",id},{"mapped",true},
+            {"visible",true},{"floating",true},{"monitor",0},{"workspace",QJsonObject{{"id",1}}},
+            {"at",QJsonArray{x,y}},{"size",QJsonArray{w,h}}};};
+        WindowScene scene;
+        scene.update({window("a",200,400)},monitor(),{240,420},0,true);
+        auto edges=scene.edges("test",0);QCOMPARE(edges.size(),size_t(2));
+        QCOMPARE(edges[0].left,100.0);QCOMPARE(edges[0].y,200.0);QCOMPARE(edges[1].y,500.0);
+        scene.update({window("a",220,410)},monitor(),{260,430},50,true);
+        QCOMPARE(scene.edges("test",50).size(),size_t(2));QCOMPARE(scene.generation(),0ULL);
+        scene.update({window("a",420,410)},monitor(),{260,430},100,true);
+        QVERIFY(scene.edges("test",100).empty());QCOMPARE(scene.generation(),0ULL);
+        QVERIFY(scene.edges("test",1000).empty());QCOMPARE(scene.edges("test",1200).size(),size_t(2));
+        WindowScene disabled;
+        disabled.update({window("a",200,400)},monitor(),{240,420},0,false);
+        disabled.update({window("a",220,410)},monitor(),{260,430},50,false);
+        QVERIFY(disabled.edges("test",50).empty());
+        WindowScene resize;
+        resize.update({window("a",200,400)},monitor(),{240,420},0,true);
+        resize.update({window("a",200,400,420)},monitor(),{260,420},50,true);
+        QVERIFY(resize.edges("test",50).empty());
+        scene.update({window("a",420,410)},monitor(2),{260,430},1300,true);
+        QVERIFY(scene.edges("test",2500).empty());
+        WindowScene overlap;
+        overlap.update({window("a",200,400),window("b",350,380,100,100)},monitor(),{0,0},0,false);
+        edges=overlap.edges("test",0);
+        std::vector<StandingEdge> upper;
+        for(const auto& e:edges) if(e.id=="a:0:top") upper.push_back(e);
+        QCOMPARE(upper.size(),size_t(2));QCOMPARE(upper[0].right,250.0);QCOMPARE(upper[1].left,350.0);
+        // Suspend only the moving window, including its uncertain occlusion.
+        overlap.update({window("a",200,400),window("b",355,380,100,100)},monitor(),{0,0},50,false);
+        edges=overlap.edges("test",50);QCOMPARE(edges.size(),size_t(2));
+        QCOMPARE(edges[0].id,std::string("a:0:top"));QCOMPARE(edges[0].right,500.0);
+        // A faster pointer-correlated drag is now allowed; an excessive jump
+        // or a similarly sized keyboard move still withdraws that window.
+        WindowScene fast;
+        fast.update({window("a",200,400)},monitor(),{240,420},0,true);
+        fast.update({window("a",440,400)},monitor(),{480,420},50,true);
+        QCOMPARE(fast.edges("test",50).size(),size_t(2));
+        fast.update({window("a",199,400)},monitor(),{239,420},100,true);
+        QVERIFY(fast.edges("test",100).empty());
+        // Client title bars wait for a drag threshold: the pointer first moves
+        // while the window is still stationary, then the window follows later.
+        WindowScene titleBar;
+        titleBar.update({window("a",200,400)},monitor(),{240,420},0,true);
+        titleBar.update({window("a",200,400)},monitor(),{250,420},50,true);
+        titleBar.update({window("a",208,400)},monitor(),{258,420},100,true);
+        QCOMPARE(titleBar.edges("test",100).size(),size_t(2));
+        titleBar.update({window("a",215,400)},monitor(),{258,420},150,true);
+        QCOMPARE(titleBar.edges("test",150).size(),size_t(2));
+        titleBar.update({window("a",218,400)},monitor(),{258,420},200,true);
+        QCOMPARE(titleBar.edges("test",200).size(),size_t(2));
+        // Consumed motion must not authorize another keyboard move, even if
+        // its direction and size happen to match the previous pointer motion.
+        titleBar.update({window("a",228,400)},monitor(),{258,420},250,true);
+        QVERIFY(titleBar.edges("test",250).empty());
+        WindowScene threshold;
+        threshold.update({window("a",200,400)},monitor(),{240,420},0,true);
+        threshold.update({window("a",204,400)},monitor(),{254,420},50,true);
+        QCOMPARE(threshold.edges("test",50).size(),size_t(2));
+        threshold.update({window("a",204,400)},monitor(),{254,420},200,true);
+        threshold.update({window("a",214,400)},monitor(),{254,420},300,true);
+        QVERIFY(threshold.edges("test",300).empty()); // Old hover motion expired.
+        WindowScene separate;
+        separate.update({window("a",200,400),window("b",700,400,200)},monitor(),{0,0},0,true);
+        const auto before=separate.edges("test",0);
+        GravityBody a,b;
+        a.x=250;b.x=650;a.y=b.y=120;a.height=b.height=100;a.halfWidth=b.halfWidth=25;
+        a.step(1,before,800,600);b.step(1,before,800,600);QVERIFY(a.onWindow()&&b.onWindow());
+        separate.update({window("a",240,400),window("b",700,400,200)},monitor(),{0,0},50,true);
+        edges=separate.edges("test",50);QCOMPARE(edges.size(),size_t(2));
+        QCOMPARE(edges[0].id,std::string("b:0:top"));
+        // Even if 1 FPS rendering misses the entire pause, only A's revised
+        // support ID detaches. B keeps its footing and must not fall or jump.
+        edges=separate.edges("test",1200);
+        a.step(.1,edges,800,600);b.step(.1,edges,800,600);
+        QVERIFY(!a.grounded());QVERIFY(a.y>200);QVERIFY(b.onWindow());QCOMPARE(b.y,200.0);
+        separate.suspendWindow("a",1300);
+        edges=separate.edges("test",1300);QCOMPARE(edges.size(),size_t(2));
+        QCOMPARE(edges[0].id,std::string("b:0:top"));
+    }
+    void settingsWheelAndSwitchAlignment() {
+        QTemporaryDir dir;Controller c(dir.path()+"/data",dir.path()+"/config");
+        QQmlApplicationEngine engine;engine.addImportPath("qrc:/qt/qml");
+        engine.rootContext()->setContextProperty("backend",&c);engine.rootContext()->setContextProperty("trayAvailable",false);
+        engine.setInitialProperties({{"currentPage","model-settings"},{"height",700}});engine.load(QUrl("qrc:/ui/qml/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());auto* window=qobject_cast<QQuickWindow*>(engine.rootObjects().first());QVERIFY(window);
+        QVERIFY(QTest::qWaitForWindowExposed(window));
+        auto* scroll=window->findChild<QQuickItem*>("generalSettingsScroll");
+        auto* handler=window->findChild<QQuickItem*>("generalSettingsWheelHandler");QVERIFY(scroll&&handler);
+        QTRY_VERIFY(scroll->property("contentHeight").toReal()>scroll->height()+88);
+        auto* automatic=window->findChild<QQuickItem*>("autoActivitySwitch");QVERIFY(automatic);
+        const auto right=automatic->mapToScene(QPointF(automatic->width(),0)).x();
+        for(const auto* name:{"gravitySwitch","windowEdgesSwitch","trackMovingWindowsSwitch"}) {
+            auto* item=window->findChild<QQuickItem*>(name);QVERIFY(item);
+            QVERIFY(std::abs(item->mapToScene(QPointF(item->width(),0)).x()-right)<1);
+        }
+        QPointingDevice seat("Wayland seat",100,QInputDevice::DeviceType::TouchPad,
+            QPointingDevice::PointerType::Finger,QInputDevice::Capability::Position,5,0);
+        const QPointF where=scroll->mapToScene(QPointF(scroll->width()*.7,scroll->height()*.6));
+        const QPointF overlayOrigin=handler->mapToScene(QPointF());
+        auto wheel=[&](int angle,int pixels) {
+            QWheelEvent event(where,window->mapToGlobal(where.toPoint()),QPoint(0,pixels),QPoint(0,angle),
+                Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false,Qt::MouseEventNotSynthesized,&seat);
+            QCoreApplication::sendEvent(window,&event);QCoreApplication::processEvents();
+        };
+        wheel(-120,-15);QCOMPARE(scroll->property("contentY").toReal(),88.0);
+        QCOMPARE(handler->mapToScene(QPointF()),overlayOrigin);
+        wheel(120,15);QCOMPARE(scroll->property("contentY").toReal(),0.0);
+        wheel(-120,0);QCOMPARE(scroll->property("contentY").toReal(),88.0);
+        for(const auto* name:{"individualSettingsWheelHandler","panelSettingsWheelHandler"})
+            QVERIFY(window->findChild<QQuickItem*>(name));
+    }
+    void windowTrackerSendsBeforeNextGuiEvent() {
+        QTemporaryDir dir;QVERIFY(dir.isValid());
+        const QByteArray runtime=qgetenv("XDG_RUNTIME_DIR"),signature=qgetenv("HYPRLAND_INSTANCE_SIGNATURE");
+        auto restore=qScopeGuard([&]{
+            runtime.isNull()?qunsetenv("XDG_RUNTIME_DIR"):qputenv("XDG_RUNTIME_DIR",runtime);
+            signature.isNull()?qunsetenv("HYPRLAND_INSTANCE_SIGNATURE"):qputenv("HYPRLAND_INSTANCE_SIGNATURE",signature);
+        });
+        qputenv("XDG_RUNTIME_DIR",dir.path().toUtf8());qputenv("HYPRLAND_INSTANCE_SIGNATURE","fixture");
+        const QString base=dir.path()+"/hypr/fixture/";QVERIFY(QDir().mkpath(base));
+        QLocalServer server;QVERIFY(server.listen(base+".socket.sock"));
+        WindowTracker tracker;tracker.configure(true,false);
+        // Run only the queued connection, then keep the GUI event loop paused,
+        // as it can be during an EGL/Wayland round trip on startup or resize.
+        QCoreApplication::sendPostedEvents(&tracker,QEvent::MetaCall);
+        QVERIFY(server.waitForNewConnection(300));
+        auto* socket=server.nextPendingConnection();QVERIFY(socket);
+        QVERIFY2(socket->bytesAvailable() || socket->waitForReadyRead(300),
+                 "Hyprland must receive the command without another GUI event");
+        QCOMPARE(socket->readAll(),QByteArray("j/animations"));
+        tracker.configure(false,false);
+    }
+    void windowTrackerIpcAndStaleInput() {
+        QTemporaryDir dir;QVERIFY(dir.isValid());
+        const QByteArray runtime=qgetenv("XDG_RUNTIME_DIR"),signature=qgetenv("HYPRLAND_INSTANCE_SIGNATURE");
+        auto restore=qScopeGuard([&]{
+            runtime.isNull()?qunsetenv("XDG_RUNTIME_DIR"):qputenv("XDG_RUNTIME_DIR",runtime);
+            signature.isNull()?qunsetenv("HYPRLAND_INSTANCE_SIGNATURE"):qputenv("HYPRLAND_INSTANCE_SIGNATURE",signature);
+        });
+        qputenv("XDG_RUNTIME_DIR",dir.path().toUtf8());qputenv("HYPRLAND_INSTANCE_SIGNATURE","fixture");
+        const QString base=dir.path()+"/hypr/fixture/";QVERIFY(QDir().mkpath(base));
+        QLocalServer server;QVERIFY(server.listen(base+".socket.sock"));
+        bool invalid=false;int snapshots=0;
+        connect(&server,&QLocalServer::newConnection,this,[&]{
+            while(auto* socket=server.nextPendingConnection()) {
+                connect(socket,&QLocalSocket::disconnected,socket,&QObject::deleteLater);
+                connect(socket,&QLocalSocket::readyRead,socket,[&,socket]{
+                    const auto command=socket->readAll();QByteArray reply;
+                    if(command=="j/animations") reply="[[],[]]";
+                    if(command=="[[BATCH]]j/clients;j/monitors;j/cursorpos") {
+                        ++snapshots;
+                        reply=R"([{"address":"a","mapped":true,"visible":true,"floating":true,"monitor":0,"workspace":{"id":1},"at":[100,200],"size":[400,300]}])";
+                        reply+="\n\n\n";
+                        reply+=R"([{"id":0,"name":"test","x":0,"y":0,"width":800,"height":600,"scale":1,"activeWorkspace":{"id":1}}])";
+                        reply+="\n\n\n";
+                        reply+=R"({"x":0,"y":0})";
+                    }
+                    socket->write(invalid?QByteArray("broken"):reply);socket->disconnectFromServer();
+                });
+            }
+        });
+        WindowTracker tracker;QSignalSpy updates(&tracker,&WindowTracker::updated);tracker.configure(true,false);
+        QTRY_VERIFY_WITH_TIMEOUT(updates.count()>0,1000);
+        unsigned long long generation=0;std::vector<StandingEdge> edges;
+        QVERIFY(readStandingEdges(tracker.frame("test").toStdString(),generation,edges));QCOMPARE(edges.size(),size_t(2));
+        QVERIFY(snapshots>0);
+        const auto previous=generation;invalid=true;updates.clear();QTRY_VERIFY_WITH_TIMEOUT(updates.count()>0,1000);
+        QVERIFY(readStandingEdges(tracker.frame("test").toStdString(),generation,edges));QVERIFY(edges.empty());QVERIFY(generation>previous);
+        QVERIFY(!readStandingEdges("ARKPETS_EDGES 0 1 a 0 20 nan 0",generation,edges));
+        QVERIFY(!readStandingEdges("ARKPETS_EDGES 0 5000",generation,edges));
+        tracker.configure(false,false);
+    }
+    void gravitySettingsAndMaterialControls() {
+        QTemporaryDir dir;
+        { Controller c(dir.path()+"/data",dir.path()+"/config");
+          for(const auto* key:{"gravity","windowEdges","trackMovingWindows"}) QVERIFY(!c.preferences()[key].toBool());
+          QQmlApplicationEngine engine;engine.addImportPath("qrc:/qt/qml");
+          engine.rootContext()->setContextProperty("backend",&c);engine.rootContext()->setContextProperty("trayAvailable",false);
+          engine.setInitialProperties({{"currentPage","model-settings"}});engine.load(QUrl("qrc:/ui/qml/Main.qml"));
+          QVERIFY(!engine.rootObjects().isEmpty());auto* root=engine.rootObjects().first();
+          auto* edges=root->findChild<QObject*>("windowEdgesSwitch");auto* gravity=root->findChild<QObject*>("gravitySwitch");
+          auto* moving=root->findChild<QObject*>("trackMovingWindowsSwitch");QVERIFY(edges&&gravity&&moving);
+          edges->setProperty("checked",true);QVERIFY(QMetaObject::invokeMethod(edges,"clicked"));
+          QVERIFY(root->property("draftGravity").toBool());QVERIFY(root->property("draftWindowEdges").toBool());
+          root->setProperty("draftTrackMovingWindows",true);QVERIFY(QMetaObject::invokeMethod(root,"saveSettings"));
+          QVERIFY(c.preferences()["gravity"].toBool());QVERIFY(c.preferences()["windowEdges"].toBool());
+          gravity->setProperty("checked",false);QVERIFY(QMetaObject::invokeMethod(gravity,"clicked"));
+          QVERIFY(!root->property("draftWindowEdges").toBool());
+        }
+        Controller restored(dir.path()+"/data",dir.path()+"/config");
+        QVERIFY(restored.preferences()["gravity"].toBool());QVERIFY(restored.preferences()["windowEdges"].toBool());
+        QVERIFY(restored.preferences()["trackMovingWindows"].toBool());
+        restored.savePreferences({{"gravity",false}});QVERIFY(!restored.preferences()["windowEdges"].toBool());
+        restored.savePreferences({{"windowEdges",true}});QVERIFY(restored.preferences()["gravity"].toBool());
+    }
+    void liveWindowTracker() {
+        if (!qEnvironmentVariableIsSet("ARKPETS_LIVE_HYPRLAND")) QSKIP("Enable only for a read-only Hyprland IPC check");
+        WindowTracker tracker;QSignalSpy updates(&tracker,&WindowTracker::updated);tracker.configure(true,false);
+        QTRY_VERIFY_WITH_TIMEOUT(updates.count()>=3,3000);
+        bool found=false;size_t count=0;
+        for(const auto* screen:QGuiApplication::screens()) {
+            unsigned long long generation=0;std::vector<StandingEdge> edges;
+            QVERIFY(readStandingEdges(tracker.frame(screen->name()).toStdString(),generation,edges));
+            count+=edges.size();found|=!edges.empty();
+        }
+        QVERIFY2(found,"No usable window edges found on the active outputs");
+        qInfo()<<"Read"<<count<<"window edges through the live asynchronous IPC client";
+        tracker.configure(false,false);
+    }
+    void uniformScaleIndependentOfModelAndActionBounds() {
         ModelBounds relax;relax.include(-40,0);relax.include(40,100);
         ModelBounds all=relax;all.include(-90,-50);all.include(150,130);all.includeMirror();
-        ModelViewport manual(relax,relax.height(),400),automatic(all,relax.height(),400);
-        QCOMPARE(manual.scale,4.0);QCOMPARE(automatic.scale,manual.scale);
+        ModelViewport manual(relax,1.25),automatic(all,1.25);
+        QCOMPARE(manual.scale,1.25);QCOMPARE(automatic.scale,manual.scale);
         QVERIFY(automatic.width>manual.width);QVERIFY(automatic.height>manual.height);
         auto renderedHeight=[](const ModelViewport& view,float bottom,float top) {
             return (view.projectY(top,view.height)-view.projectY(bottom,view.height))*view.height/2;
         };
-        QVERIFY(std::abs(renderedHeight(manual,0,100)-400)<.001);
-        QVERIFY(std::abs(renderedHeight(automatic,0,100)-400)<.001);
+        QVERIFY(std::abs(renderedHeight(manual,0,100)-125)<.001);
+        QVERIFY(std::abs(renderedHeight(automatic,0,100)-125)<.001);
+        // A taller model keeps its proportions; horns and other attachments
+        // may enlarge the canvas but must not shrink the same 100-unit body.
+        ModelBounds taller=all;taller.include(0,200);
+        ModelViewport otherModel(taller,1.25);
+        QCOMPARE(otherModel.scale,manual.scale);
+        QVERIFY(std::abs(renderedHeight(otherModel,0,100)-125)<.001);
+        QVERIFY(std::abs(renderedHeight(otherModel,0,200)-250)<.001);
         QVERIFY(automatic.projectY(-50,automatic.height)>-1);
         QVERIFY(automatic.projectY(130,automatic.height)<1);
         QVERIFY(automatic.projectX(-150,automatic.width)>-1);
         QVERIFY(automatic.projectX(150,automatic.width)<1);
-        // A smaller requested height changes scale, never the selected action.
-        ModelViewport half(all,relax.height(),200);
+        ModelViewport half(all,.625);
         QCOMPARE(half.scale,automatic.scale/2);
-        QVERIFY(std::abs(renderedHeight(half,0,100)-200)<.001);
-        QVERIFY_EXCEPTION_THROWN(ModelViewport(all,0,400),std::runtime_error);
+        QVERIFY(std::abs(renderedHeight(half,0,100)-62.5)<.001);
+        QVERIFY_EXCEPTION_THROWN(ModelViewport(all,0),std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(ModelViewport(all,std::numeric_limits<double>::quiet_NaN()),std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(ModelViewport(all,1e10),std::runtime_error);
+    }
+    void rendererScaleArguments() {
+        const QString renderer=QCoreApplication::applicationDirPath()+"/arkpets-renderer";
+        for (const QString& value:{QString("0.0625"),QString("0.75"),QString("1"),QString("6.25")}) {
+            QProcess p;p.start(renderer,{"--scale",value,"--help"});QVERIFY(p.waitForFinished(3000));
+            QCOMPARE(p.exitCode(),0);auto help=p.readAllStandardOutput();
+            QVERIFY(help.contains("--scale"));QVERIFY(!help.contains("--size"));
+        }
+        for (const QString& value:{QString("0"),QString("-1"),QString("0.0624"),QString("6.26"),QString("nan"),QString("inf"),QString("0.75x")}) {
+            QProcess p;p.start(renderer,{"--scale",value,"--help"});QVERIFY(p.waitForFinished(3000));
+            QVERIFY(p.exitCode()!=0);
+        }
+        QProcess p;p.start(renderer,{"--right","-350","--bottom","-80","--help"});
+        QVERIFY(p.waitForFinished(3000));QCOMPARE(p.exitCode(),0);
+    }
+    void defaultMovementBoundsAllowEffectsOffscreen() {
+        ModelBounds body;body.include(-20,0);body.include(80,100);
+        ModelBounds effects=body;effects.include(-200,-50);effects.include(200,900);
+        ModelViewport view(effects,1.0);
+        const auto limits=view.movementLimits(body,800,600,false);
+        // The 982-pixel canvas exceeds the monitor, but the 100-pixel Default
+        // body can still travel from the bottom edge all the way to the top.
+        QVERIFY(view.height>600);
+        QCOMPARE(limits.maxBottom-limits.minBottom,500);
+        QCOMPARE(limits.maxRight-limits.minRight,700);
+        QVERIFY(limits.minBottom<0);QVERIFY(limits.minRight<0);
+        auto bodyTop=[&](int margin){return 600-margin-(body.maxY-view.minY)*view.scale;};
+        auto bodyBottom=[&](int margin){return 600-margin-(body.minY-view.minY)*view.scale;};
+        QCOMPARE(bodyTop(limits.maxBottom),0.0);QCOMPARE(bodyBottom(limits.minBottom),600.0);
+        const auto flipped=view.movementLimits(body,800,600,true);
+        QCOMPARE(flipped.maxRight-flipped.minRight,700);
+        QCOMPARE(flipped.minRight,limits.minRight-60);
+        const auto oversized=view.movementLimits(body,50,50,false);
+        QCOMPARE(oversized.minRight,oversized.maxRight);QCOMPARE(oversized.minBottom,oversized.maxBottom);
+        // Automatic walking must support the same signed margin interval.
+        ActivityDirector movement(activityPlan({"Default","Move"},"Default"),-150,7);
+        bool walked=false;
+        for(int n=0;n<200;++n) {
+            movement.advance(.1,-100,60,-200);walked|=movement.walking();
+            QVERIFY(movement.right()>=-200&&movement.right()<=-100);
+        }
+        QVERIFY(walked);
+        movement.advance(0,-180,0,-200);QVERIFY(movement.right()<=-180);
     }
     void activityTimingBoundsAndFallback() {
         auto plan=activityPlan({"Relax","Move","Sit","Sleep","Interact"},"Interact");
@@ -151,9 +436,9 @@ private slots:
         engine.rootContext()->setContextProperty("backend",&c);engine.rootContext()->setContextProperty("trayAvailable",false);
         engine.setInitialProperties({{"currentPage","model-settings"}});engine.load(QUrl("qrc:/ui/qml/Main.qml"));
         QVERIFY(!engine.rootObjects().isEmpty());auto* window=qobject_cast<QQuickWindow*>(engine.rootObjects().first());QVERIFY(window);
-        auto* size=window->findChild<QObject*>("sizeField");auto* slider=window->findChild<QObject*>("sizeSlider");
+        auto* scale=window->findChild<QObject*>("scaleField");auto* slider=window->findChild<QObject*>("scaleSlider");
         auto* automatic=window->findChild<QObject*>("autoActivitySwitch");
-        QVERIFY(size&&slider&&automatic);
+        QVERIFY(scale&&slider&&automatic);
         QVERIFY(QTest::qWaitForWindowExposed(window));
         QVERIFY(window->flags().testFlag(Qt::FramelessWindowHint));
         auto click=[window](QObject* object) {
@@ -163,24 +448,24 @@ private slots:
             return true;
         };
         QVERIFY(!automatic->property("checked").toBool());
-        QVERIFY(QMetaObject::invokeMethod(size,"stepBy",Q_ARG(QVariant,1)));
-        QCOMPARE(window->property("draftSize").toInt(),281);QCOMPARE(slider->property("value").toInt(),281);
-        QVERIFY(QMetaObject::invokeMethod(slider,"setValue",Q_ARG(QVariant,400)));
-        QCOMPARE(window->property("draftSize").toInt(),400);QCOMPARE(size->property("value").toInt(),400);
+        scale->setProperty("text","0.75");QVERIFY(QMetaObject::invokeMethod(scale,"commit"));
+        QCOMPARE(window->property("draftScale").toDouble(),.75);QCOMPARE(slider->property("value").toDouble(),.75);
+        QVERIFY(QMetaObject::invokeMethod(slider,"setValue",Q_ARG(QVariant,1.5)));
+        QCOMPARE(window->property("draftScale").toDouble(),1.5);QCOMPARE(scale->property("value").toDouble(),1.5);
         QVERIFY(click(automatic));QVERIFY(window->property("draftAutoActivity").toBool());
         QVERIFY(QMetaObject::invokeMethod(window,"loadPreferences"));
-        QCOMPARE(size->property("value").toInt(),280);QCOMPARE(slider->property("value").toInt(),280);
+        QCOMPARE(scale->property("value").toDouble(),1.0);QCOMPARE(slider->property("value").toDouble(),1.0);
         QVERIFY(!automatic->property("checked").toBool());
         QVERIFY(click(automatic));
         QVERIFY(QMetaObject::invokeMethod(window,"saveSettings"));QVERIFY(c.preferences()["autoActivity"].toBool());
         // Real text editing and Save while the TextInput still owns focus.
-        auto* input=qvariant_cast<QQuickItem*>(size->property("input"));QVERIFY(input);
-        input->forceActiveFocus();QTest::keyClick(window,Qt::Key_A,Qt::ControlModifier);QTest::keyClick(window,Qt::Key_4);QTest::keyClick(window,Qt::Key_5);QTest::keyClick(window,Qt::Key_6);
-        QCOMPARE(window->property("draftSize").toInt(),456);QCOMPARE(slider->property("value").toInt(),456);
-        QVERIFY(click(window->findChild<QObject*>("saveSettings")));QCOMPARE(c.preferences()["size"].toInt(),456);
+        auto* input=qvariant_cast<QQuickItem*>(scale->property("input"));QVERIFY(input);
+        input->forceActiveFocus();QTest::keyClick(window,Qt::Key_A,Qt::ControlModifier);for (auto key:{Qt::Key_1,Qt::Key_Period,Qt::Key_2,Qt::Key_5}) QTest::keyClick(window,key);
+        QCOMPARE(window->property("draftScale").toDouble(),1.25);QCOMPARE(slider->property("value").toDouble(),1.25);
+        QVERIFY(click(window->findChild<QObject*>("saveSettings")));QCOMPARE(c.preferences()["scale"].toDouble(),1.25);
         // A slider change must commit after leaving an edited text field.
-        QVERIFY(click(slider));int sliderSize=window->property("draftSize").toInt();
-        QVERIFY(click(window->findChild<QObject*>("saveSettings")));QCOMPARE(c.preferences()["size"].toInt(),sliderSize);
+        QVERIFY(click(slider));double sliderScale=window->property("draftScale").toDouble();
+        QVERIFY(click(window->findChild<QObject*>("saveSettings")));QCOMPARE(c.preferences()["scale"].toDouble(),sliderScale);
         auto* layer=window->findChild<QObject*>("layerPicker");QVERIFY(layer);
         QVERIFY(click(layer));QTest::qWait(250);
         QQuickItem* option=nullptr;
@@ -376,14 +661,47 @@ private slots:
     void settingsPersistAndValidate() {
         QTemporaryDir dir;
         {Controller c(dir.path()+"/data",dir.path()+"/config");
-            c.savePreferences({{"size",416},{"fps",60},{"autoActivity",true},{"clickThrough",true},{"flip",true},{"monitor","DP-4"},{"layer","bottom"}});
-            QVERIFY(c.error().isEmpty());c.savePreferences({{"size",0},{"fps",60}});QVERIFY(!c.error().isEmpty());
+            c.savePreferences({{"scale",1.04},{"fps",60},{"autoActivity",true},{"clickThrough",true},{"flip",true},{"monitor","DP-4"},{"layer","bottom"}});
+            QVERIFY(c.error().isEmpty());
+            for (double invalid:{0.0,.249,2.501,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}) {
+                c.savePreferences({{"scale",invalid},{"fps",60}});QVERIFY(!c.error().isEmpty());
+                QCOMPARE(c.preferences()["scale"].toDouble(),1.04);
+            }
         }
         Controller restored(dir.path()+"/data",dir.path()+"/config");
-        QCOMPARE(restored.preferences()["size"].toInt(),416);QCOMPARE(restored.preferences()["fps"].toInt(),60);
+        QCOMPARE(restored.preferences()["scale"].toDouble(),1.04);QCOMPARE(restored.preferences()["fps"].toInt(),60);
         QVERIFY(restored.preferences()["clickThrough"].toBool());QCOMPARE(restored.preferences()["layer"].toString(),QString("bottom"));
         QVERIFY(restored.preferences()["autoActivity"].toBool());
         QCOMPARE(restored.downloadedCount(),0);
+    }
+    void legacyHeightRetiredWithoutChangingRelativeSettings() {
+        for (bool hasScale:{false,true}) {
+            QTemporaryDir dir;const QString config=dir.path()+"/config";
+            QDir().mkpath(config);
+            {
+                QSettings ini(config+"/settings.ini",QSettings::IniFormat);
+                ini.setValue("size",288);ini.setValue("fps",48);ini.setValue("autoActivity",true);
+                ini.setValue("models/2025_shu/multiplier",1.25);
+                ini.setValue("models/2025_shu/monitor","DP-3");
+                ini.setValue("models/2025_shu/enabled",true);
+                if(hasScale) ini.setValue("scale",.83);
+                ini.sync();
+            }
+            {
+                Controller c(dir.path()+"/data",config);
+                QCOMPARE(c.preferences()["scale"].toDouble(),hasScale?.83:1.0);
+                QVERIFY(!c.preferences().contains("size"));
+                QCOMPARE(c.preferences()["fps"].toInt(),48);QVERIFY(c.preferences()["autoActivity"].toBool());
+                QSettings ini(config+"/settings.ini",QSettings::IniFormat);
+                QVERIFY(!ini.contains("size"));
+                QCOMPARE(ini.value("models/2025_shu/multiplier").toDouble(),1.25);
+                QCOMPARE(ini.value("models/2025_shu/monitor").toString(),QString("DP-3"));
+                QVERIFY(ini.value("models/2025_shu/enabled").toBool());
+                c.savePreferences({{"scale",.65}});
+            }
+            Controller restored(dir.path()+"/data",config);
+            QCOMPARE(restored.preferences()["scale"].toDouble(),.65);
+        }
     }
     void individualSettingsInheritanceAndPersistence() {
         QTemporaryDir dir;
@@ -408,12 +726,12 @@ private slots:
             QVERIFY(c.modelSettings(b)["effective"].toMap()["right"].toInt()!=142);
             c.saveModelSettings(a,{{"multiplier",.75},{"overrides",QVariantMap{{"monitor","DP-3"},{"layer","overlay"},{"autoActivity",false},{"flip",true}}}});
             QVERIFY2(c.error().isEmpty(),qPrintable(c.error()));
-            c.savePreferences({{"size",600},{"fps",30},{"monitor","DP-4"},{"autoActivity",true}});
+            c.savePreferences({{"scale",1.5},{"fps",30},{"monitor","DP-4"},{"autoActivity",true}});
             auto own=c.modelSettings(a),inherited=c.modelSettings(b)["effective"].toMap();
             auto effective=own["effective"].toMap();
-            QCOMPARE(effective["size"].toInt(),450);QCOMPARE(effective["fps"].toInt(),30);
+            QCOMPARE(effective["scale"].toDouble(),1.125);QCOMPARE(effective["fps"].toInt(),30);
             QCOMPARE(effective["monitor"].toString(),QString("DP-3"));QVERIFY(!effective["autoActivity"].toBool());
-            QCOMPARE(inherited["size"].toInt(),600);QCOMPARE(inherited["monitor"].toString(),QString("DP-4"));
+            QCOMPARE(inherited["scale"].toDouble(),1.5);QCOMPARE(inherited["monitor"].toString(),QString("DP-4"));
             QVERIFY(inherited["autoActivity"].toBool());QCOMPARE(inherited["layer"].toString(),QString("top"));
             QVERIFY(!own["overrides"].toMap().contains("fps"));
             c.saveModelSettings(b,{{"multiplier",0.0},{"overrides",QVariantMap{}}});QVERIFY(!c.error().isEmpty());
@@ -427,12 +745,12 @@ private slots:
         restored.saveModelSettings(a,{{"multiplier",1.0},{"overrides",QVariantMap{}},{"fps",120}});
         QVERIFY(restored.modelSettings(a)["overrides"].toMap().isEmpty());
         QCOMPARE(restored.modelSettings(a)["effective"].toMap()["fps"].toInt(),30);
-        restored.savePreferences({{"size",96}});
+        restored.savePreferences({{"scale",.25}});
         restored.saveModelSettings(a,{{"multiplier",.25},{"overrides",QVariantMap{}}});
-        QCOMPARE(restored.modelSettings(a)["effective"].toMap()["size"].toInt(),24);
-        restored.savePreferences({{"size",800}});
+        QCOMPARE(restored.modelSettings(a)["effective"].toMap()["scale"].toDouble(),.0625);
+        restored.savePreferences({{"scale",2.5}});
         restored.saveModelSettings(a,{{"multiplier",2.5},{"overrides",QVariantMap{}}});
-        QCOMPARE(restored.modelSettings(a)["effective"].toMap()["size"].toInt(),2000);
+        QCOMPARE(restored.modelSettings(a)["effective"].toMap()["scale"].toDouble(),6.25);
         restored.selectModel(b);restored.removeSelected();QCOMPARE(restored.pets().size(),1);
         QCOMPARE(restored.modelSettings(a)["multiplier"].toDouble(),2.5);
     }
@@ -573,7 +891,7 @@ private slots:
         QCOMPARE(count(),0);for(const auto& name:fixed)QCOMPARE(item(name)->mapToScene(QPointF()).y(),positions[name]);
         QVERIFY(click("sidebarEnabledOnlySwitch"));QCOMPARE(count(),24);
         QVERIFY(click("sidebarQuickAdjustSwitch"));QVERIFY(!item("nav-toggle-pet:"+ids[0])->isVisible());
-        QCOMPARE(c.preferences()["size"].toInt(),280);QVERIFY(!c.petRunning());
+        QCOMPARE(c.preferences()["scale"].toDouble(),1.0);QVERIFY(!c.petRunning());
     }
     void liveSidebarQuickControls() {
         if(qEnvironmentVariableIsEmpty("ARKPETS_SIDEBAR_PROFILE"))QSKIP("Opt-in sidebar controls with two real Hyprland models.");
@@ -582,7 +900,7 @@ private slots:
         Controller c(profile+"/data",profile+"/config");QVERIFY2(c.error().isEmpty(),qPrintable(c.error()));
         QCOMPARE(c.pets().size(),2);c.stopPet();
         auto cleanup=qScopeGuard([&]{c.stopPet();});
-        c.savePreferences({{"size",200},{"fps",30},{"autoActivity",false},{"monitor",""},{"layer","top"}});
+        c.savePreferences({{"scale",.5},{"fps",30},{"autoActivity",false},{"monitor",""},{"layer","top"}});
         c.panel()->setMode("dark");c.panel()->setPalette("purple");
         c.panel()->setSidebarQuickAdjust(true);c.panel()->setSidebarEnabledOnly(false);
         QQmlApplicationEngine engine;engine.addImportPath("qrc:/qt/qml");engine.rootContext()->setContextProperty("backend",&c);
@@ -712,7 +1030,7 @@ private slots:
         const QString a="171_bldsk_witch#1",b="2025_shu";
         Controller c(profile+"/data",profile+"/config");QVERIFY2(c.error().isEmpty(),qPrintable(c.error()));
         c.stopPet();auto cleanup=qScopeGuard([&]{c.stopPet();});
-        c.savePreferences({{"size",200},{"fps",30},{"autoActivity",true},{"monitor",""},{"layer","top"}});
+        c.savePreferences({{"scale",.5},{"fps",30},{"autoActivity",true},{"monitor",""},{"layer","top"}});
         for(const auto& id:{a,b})c.saveModelSettings(id,{{"multiplier",1.0},{"overrides",QVariantMap{}},{"animation","Relax"}});
         c.panel()->setMode("dark");c.panel()->setPalette("purple");
         QQmlApplicationEngine engine;engine.addImportPath("qrc:/qt/qml");engine.rootContext()->setContextProperty("backend",&c);
@@ -795,7 +1113,7 @@ private slots:
             Controller c(profile+"/data",profile+"/config");
             QVERIFY2(c.error().isEmpty(),qPrintable(c.error()));QCOMPARE(c.pets().size(),2);
             c.stopPet();
-            c.savePreferences({{"size",320},{"fps",30},{"autoActivity",false},{"monitor","DP-4"},{"layer","overlay"},{"clickThrough",false},{"flip",false}});
+            c.savePreferences({{"scale",.8},{"fps",30},{"autoActivity",false},{"monitor","DP-4"},{"layer","overlay"},{"clickThrough",false},{"flip",false}});
             c.saveModelSettings(a,{{"multiplier",1.0},{"overrides",QVariantMap{}}});
             c.saveModelSettings(b,{{"multiplier",.75},{"overrides",QVariantMap{{"flip",true}}}});
             namespaceA=c.modelSettings(a)["namespace"].toString();namespaceB=c.modelSettings(b)["namespace"].toString();
@@ -840,7 +1158,7 @@ private slots:
             QVERIFY(click("nav-pet:"+b));QCOMPARE(window->property("currentPetId").toString(),b);
             QVERIFY(click("modelEnabledSwitch"));QTRY_VERIFY2_WITH_TIMEOUT(ready(b),qPrintable(c.error()),7000);
             QCOMPARE(pid(a),firstA);QVERIFY(pid(a)!=pid(b));
-            QCOMPARE(argument(pid(a),"--size"),QByteArray("400"));QCOMPARE(argument(pid(b),"--size"),QByteArray("240"));
+            QCOMPARE(argument(pid(a),"--scale"),QByteArray("1"));QCOMPARE(argument(pid(b),"--scale"),QByteArray("0.6"));
             QVERIFY(!layer(namespaceA).isEmpty()&&!layer(namespaceB).isEmpty());
             const qint64 firstB=pid(b);
             QVERIFY(click("nav-pet:"+a));
@@ -852,6 +1170,7 @@ private slots:
             QVERIFY(click("modelEnabledSwitch"));QTRY_VERIFY_WITH_TIMEOUT(ready(a),7000);
             // A native drag reports only this model's new position.
             auto before=layer(namespaceA),other=layer(namespaceB),cursor=hypr("cursorpos");
+            const int initialRight=c.modelSettings(a)["effective"].toMap()["right"].toInt();
             auto move=[](int x,int y){QProcess p;p.start("hyprctl",{"eval",QString("hl.dispatch(hl.dsp.cursor.move({x=%1,y=%2}))").arg(x).arg(y)});p.waitForFinished(1000);};
             auto restoreCursor=qScopeGuard([&]{move(cursor["x"].toInt(),cursor["y"].toInt());});
             window->hide();QTest::qWait(150);
@@ -860,13 +1179,13 @@ private slots:
             QVERIFY(pointer.waitForFinished(5000));QCOMPARE(pointer.exitCode(),0);
             QTRY_VERIFY_WITH_TIMEOUT(layer(namespaceA)["x"].toInt()<before["x"].toInt()-60,2500);
             QCOMPARE(layer(namespaceB)["x"],other["x"]);QCOMPARE(pid(b),firstB);
-            QTRY_VERIFY_WITH_TIMEOUT(c.modelSettings(a)["effective"].toMap()["right"].toInt()>1200,2000);
+            QTRY_VERIFY_WITH_TIMEOUT(c.modelSettings(a)["effective"].toMap()["right"].toInt()>initialRight+60,2000);
             report["drag_isolated"]=true;window->show();QVERIFY(QTest::qWaitForWindowExposed(window));
-            // General size/FPS reach both models, applying each saved multiplier.
+            // General scale/FPS reach both models, applying each saved multiplier.
             firstA=pid(a);
-            c.savePreferences({{"size",400},{"fps",48}});
+            c.savePreferences({{"scale",1.0},{"fps",48}});
             QTRY_VERIFY_WITH_TIMEOUT(ready(a)&&ready(b)&&pid(a)!=firstA&&pid(b)!=firstB,8000);
-            QCOMPARE(argument(pid(a),"--size"),QByteArray("500"));QCOMPARE(argument(pid(b),"--size"),QByteArray("300"));
+            QCOMPARE(argument(pid(a),"--scale"),QByteArray("1.25"));QCOMPARE(argument(pid(b),"--scale"),QByteArray("0.75"));
             QCOMPARE(argument(pid(a),"--fps"),QByteArray("48"));QCOMPARE(argument(pid(b),"--fps"),QByteArray("48"));
             firstA=pid(a);qint64 secondB=pid(b);
             c.savePreferences({{"autoActivity",true}});
@@ -884,7 +1203,7 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(!c.modelSettings(a)["enabled"].toBool(),5000);
             QCOMPARE(pid(b),secondB);QVERIFY(ready(b));QVERIFY(!c.modelSettings(a)["error"].toString().isEmpty());
             c.clearError();
-            report["independent_processes_and_failure"]=true;report["global_height_and_fps"]=true;
+            report["independent_processes_and_failure"]=true;report["global_scale_and_fps"]=true;
             report["overrides_and_inheritance"]=true;
             window->setProperty("currentPage","model-settings");QTest::qWait(120);
             if(!output.isEmpty()) QVERIFY(window->grabWindow().save(output+"/general-settings.png"));
@@ -947,7 +1266,7 @@ private slots:
             QVERIFY(click("primaryAction"));QTRY_COMPARE_WITH_TIMEOUT(completed.count(),1,90000);
         }
         QVERIFY2(c.selected()["downloaded"].toBool(),qPrintable(c.error()));QVERIFY(c.animations().contains("Relax"));
-        c.savePreferences({{"size",280},{"fps",30},{"autoActivity",false},{"monitor","DP-4"},{"layer","top"},{"clickThrough",false},{"flip",false}});
+        c.savePreferences({{"scale",.7},{"fps",30},{"autoActivity",false},{"monitor","DP-4"},{"layer","top"},{"clickThrough",false},{"flip",false}});
         c.saveModelSettings("2025_shu",{{"multiplier",1.0},{"overrides",QVariantMap{}}});
         c.resetPosition();
         QVERIFY(click("primaryAction"));QTRY_VERIFY2_WITH_TIMEOUT(c.status().contains("已显示到桌面"),qPrintable(c.error()+" / "+c.status()),6000);
@@ -955,9 +1274,9 @@ private slots:
         QTest::qWait(300);QVERIFY(c.petRunning());
         window->show();QVERIFY(QTest::qWaitForWindowExposed(window));
         window->setProperty("currentPage","model-settings");QTest::qWait(100);
-        window->setProperty("draftSize",344);window->setProperty("draftFps",48);
+        window->setProperty("draftScale",.86);window->setProperty("draftFps",48);
         QVERIFY(click("saveSettings"));QTRY_VERIFY_WITH_TIMEOUT(c.status().contains("已显示到桌面"),6000);
-        QCOMPARE(c.preferences()["size"].toInt(),344);QCOMPARE(c.preferences()["fps"].toInt(),48);
+        QCOMPARE(c.preferences()["scale"].toDouble(),.86);QCOMPARE(c.preferences()["fps"].toInt(),48);
         auto hypr=[](const QString& cmd) {
             QProcess p;p.start("hyprctl",{"-j",cmd});p.waitForFinished(2000);return QJsonDocument::fromJson(p.readAllStandardOutput()).object();
         };
@@ -994,7 +1313,7 @@ private slots:
             QDir().mkpath(output);QTest::qWait(100);QVERIFY(window->grabWindow().save(output+"/settings.png"));
             window->setProperty("currentPage","library");QTest::qWait(600);QVERIFY(window->grabWindow().save(output+"/model-library.png"));
             QJsonObject report{{"live_index_models",c.totalCount()},{"downloaded",c.downloadedCount()},{"drag_before",before},{"drag_after",after},
-                {"size",c.preferences()["size"].toInt()},{"fps",c.preferences()["fps"].toInt()},{"saved_right",c.modelSettings("2025_shu")["effective"].toMap()["right"].toInt()},{"saved_bottom",c.modelSettings("2025_shu")["effective"].toMap()["bottom"].toInt()},
+                {"scale",c.preferences()["scale"].toDouble()},{"fps",c.preferences()["fps"].toInt()},{"saved_right",c.modelSettings("2025_shu")["effective"].toMap()["right"].toInt()},{"saved_bottom",c.modelSettings("2025_shu")["effective"].toMap()["bottom"].toInt()},
                 {"auto_activity_start",autoStart},{"auto_activity_moved",autoMoved},{"component_library","sudoevolve/material-components-qml"}};
             QFile file(output+"/integration-report.json");QVERIFY(file.open(QIODevice::WriteOnly));file.write(QJsonDocument(report).toJson());
         }

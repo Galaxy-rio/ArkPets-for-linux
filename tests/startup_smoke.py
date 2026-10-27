@@ -49,7 +49,7 @@ try:
         folder.mkdir(exist_ok=True)
         command = [str(args.binary.resolve()), "--model", str(args.model.resolve()),
                    "--monitor", args.monitor, "--namespace", "arkpets-startup-test",
-                   "--size", "280", "--duration", "2", "--capture-dir", str(folder.resolve())]
+                   "--scale", "0.7", "--duration", "2", "--capture-dir", str(folder.resolve())]
         result = subprocess.run(command, env={**base, **extra}, capture_output=True, text=True, timeout=12)
         (folder/"stdout.log").write_text(result.stdout)
         (folder/"stderr.log").write_text(result.stderr)

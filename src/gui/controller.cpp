@@ -56,6 +56,7 @@ Controller::Controller(QString root, QString config, QUrl base, QObject* parent)
     refreshMonitors();
     if (m_catalog.find(m_selectedId)) loadAnimations();
     m_profileTag = QString::fromLatin1(QCryptographicHash::hash(QDir(m_root).absolutePath().toUtf8(), QCryptographicHash::Sha256).toHex().left(12));
+    connect(&m_windowTracker,&WindowTracker::updated,this,&Controller::sendWindowEdges);
     // Keep the previous single pet's saved position, without applying it to all
     // future models. Existing display/behaviour values become general defaults.
     if (m_settings.value("petsSchema",0).toInt() < 1) {
@@ -66,9 +67,16 @@ Controller::Controller(QString root, QString config, QUrl base, QObject* parent)
         }
         m_settings.setValue("petsSchema",1);m_settings.sync();
     }
+    // A per-model Relax height cannot be converted into one shared raw scale.
+    // Retain relative multipliers and all other preferences when retiring it.
+    if (m_settings.contains("size")) {
+        if (!m_settings.contains("scale")) m_settings.setValue("scale",1.0);
+        m_settings.remove("size");syncSettings();
+    }
 }
 Controller::~Controller() {
     m_destroying = true;
+    m_windowTracker.configure(false,false);
     if (m_reply) { m_reply->disconnect(this); m_reply->abort(); }
     if (!m_stage.isEmpty()) QDir(m_stage).removeRecursively();
     // Terminate together, preserving enabled preferences for the next launch.
@@ -91,10 +99,14 @@ QVariantMap Controller::selected() const {
 QVariantMap Controller::preferences() const {
     // INI values may reload as strings. Export stable types to QML so the string
     // "false" never becomes a truthy switch value after restarting the app.
-    return {{"size",m_settings.value("size",280).toInt()},{"fps",m_settings.value("fps",30).toInt()},
+    const double scale=m_settings.value("scale",1.0).toDouble();
+    return {{"scale",std::isfinite(scale)?std::clamp(scale,.25,2.5):1.0},{"fps",m_settings.value("fps",30).toInt()},
             {"monitor",m_settings.value("monitor",QString()).toString()},{"layer",m_settings.value("layer","top").toString()},
             {"clickThrough",m_settings.value("clickThrough",false).toBool()},{"flip",m_settings.value("flip",false).toBool()},
             {"autoActivity",m_settings.value("autoActivity",false).toBool()},
+            {"gravity",m_settings.value("gravity",false).toBool()},
+            {"windowEdges",m_settings.value("windowEdges",false).toBool()},
+            {"trackMovingWindows",m_settings.value("trackMovingWindows",false).toBool()},
             {"right",m_settings.value("right",64).toInt()},{"bottom",m_settings.value("bottom",40).toInt()}};
 }
 void Controller::setFilter(const QString& q, const QString& kind, bool downloadedOnly) {
@@ -323,7 +335,7 @@ QVariantMap Controller::effectivePreferences(const QString& id) const {
     auto result=preferences();
     const auto prefix=settingsPrefix(id);
     const double multiplier=m_settings.value(prefix+"multiplier",1.0).toDouble();
-    result["size"]=qRound(result["size"].toInt()*(std::isfinite(multiplier)?std::clamp(multiplier,.25,2.5):1.0));
+    result["scale"]=result["scale"].toDouble()*(std::isfinite(multiplier)?std::clamp(multiplier,.25,2.5):1.0);
     for (const auto* key:{"monitor","layer","autoActivity","clickThrough","flip"}) {
         if (!m_settings.contains(prefix+key)) continue;
         const auto value=m_settings.value(prefix+key);
@@ -355,7 +367,17 @@ bool Controller::syncSettings() {
     if (m_settings.status()==QSettings::NoError) return true;
     fail("无法保存设置，请检查配置目录权限。");return false;
 }
-void Controller::notifyPets() { emit petsChanged();emit petChanged();emit selectionChanged(); }
+void Controller::notifyPets() {
+    const auto p=preferences(); bool needed=false;
+    for (const auto& [id,pet]:m_pets) needed|=isRunning(id) && pet->windowEdges;
+    m_windowTracker.configure(!m_destroying && needed && p["windowEdges"].toBool(),p["trackMovingWindows"].toBool());
+    emit petsChanged();emit petChanged();emit selectionChanged();
+}
+void Controller::sendWindowEdges() {
+    for (const auto& [id,pet]:m_pets)
+        if (isRunning(id) && !pet->stopping && pet->windowEdges && pet->process.bytesToWrite()<65536)
+            pet->process.write(m_windowTracker.frame(pet->monitor));
+}
 Controller::PetSession& Controller::session(const QString& id) {
     auto& holder=m_pets[id];
     if (holder) return *holder;
@@ -366,6 +388,7 @@ Controller::PetSession& Controller::session(const QString& id) {
     connect(&pet.process,&QProcess::readyReadStandardOutput,this,[this,id]{readPetOutput(id);});
     connect(&pet.process,&QProcess::readyReadStandardError,this,[this,id]{readPetError(id);});
     connect(&pet.process,&QProcess::stateChanged,this,[this]{notifyPets();});
+    connect(&pet.process,&QProcess::started,this,&Controller::sendWindowEdges);
     connect(&pet.process,&QProcess::errorOccurred,this,[this,id](QProcess::ProcessError error) {
         if (error!=QProcess::FailedToStart || m_destroying) return;
         auto& pet=*m_pets.at(id);pet.ready=false;pet.stopping=false;pet.killTimer.stop();
@@ -433,7 +456,7 @@ void Controller::launch(const QString& id) {
     for (const auto* key:{"right","bottom"}) m_settings.setValue(settingsPrefix(id)+key,p[key]);
     if (!syncSettings()) return;
     QStringList args{"--model",m_catalog.modelPath(id),"--animation",animation,"--namespace",petNamespace(id),
-        "--size",p["size"].toString(),"--fps",p["fps"].toString(),"--layer",p["layer"].toString(),
+        "--scale",QString::number(p["scale"].toDouble(),'g',15),"--fps",p["fps"].toString(),"--layer",p["layer"].toString(),
         "--right",p["right"].toString(),"--bottom",p["bottom"].toString()};
     QString monitor=p["monitor"].toString();
     if (monitor.isEmpty() || !m_monitors.contains(monitor)) {
@@ -443,7 +466,10 @@ void Controller::launch(const QString& id) {
     if (p["clickThrough"].toBool()) args<<"--click-through";
     if (p["flip"].toBool()) args<<"--flip";
     if (p["autoActivity"].toBool()) args<<"--auto-activity";
+    if (p["gravity"].toBool()) args<<"--gravity";
+    if (p["windowEdges"].toBool()) args<<"--window-edges";
     auto& pet=session(id);pet.output.clear();pet.diagnostics.clear();pet.error.clear();pet.ready=false;pet.stopping=false;
+    pet.monitor=monitor;pet.windowEdges=p["windowEdges"].toBool();
     pet.process.start(rendererPath(),args);notifyPets();
 }
 void Controller::stopSession(const QString& id) {
@@ -489,13 +515,16 @@ void Controller::restorePets() {
 }
 void Controller::savePreferences(const QVariantMap& values) {
     auto next=preferences();for (auto i=values.cbegin();i!=values.cend();++i) next[i.key()]=i.value();
-    int size=next["size"].toInt(),fps=next["fps"].toInt();
-    if (size<96 || size>800 || fps<1 || fps>120 || !QStringList{"top","bottom","overlay"}.contains(next["layer"].toString())) {
+    if (values.contains("gravity") && !values["gravity"].toBool() && !values.value("windowEdges",false).toBool()) next["windowEdges"]=false;
+    if (next["windowEdges"].toBool()) next["gravity"]=true;
+    const double scale=next["scale"].toDouble();
+    const int fps=next["fps"].toInt();
+    if (!std::isfinite(scale) || scale<.25 || scale>2.5 || fps<1 || fps>120 || !QStringList{"top","bottom","overlay"}.contains(next["layer"].toString())) {
         fail("设置值超出允许范围。");return;
     }
     QMap<QString,QVariantMap> before;
     for (const auto& value:pets()) {QString id=value.toMap()["id"].toString();before[id]=effectivePreferences(id);}
-    for (const auto* key:{"size","fps","monitor","layer","clickThrough","flip","autoActivity"}) m_settings.setValue(key,next[key]);
+    for (const auto* key:{"scale","fps","monitor","layer","clickThrough","flip","autoActivity","gravity","windowEdges","trackMovingWindows"}) m_settings.setValue(key,next[key]);
     if (!syncSettings()) return;
     clearError();emit preferencesChanged();notifyPets();m_status="通用设置已保存";emit activityChanged();
     for (auto i=before.cbegin();i!=before.cend();++i) if (i.value()!=effectivePreferences(i.key())) restartPet(i.key());
@@ -551,7 +580,7 @@ void Controller::readPetOutput(const QString& id) {
             auto values=line.mid(17).split(' ');
             if (values.size()==2) {
                 bool a,b;int right=values[0].toInt(&a),bottom=values[1].toInt(&b);
-                if (a && b && right>=0 && bottom>=0 && right<=20000 && bottom<=20000) {
+                if (a && b && right>=-20000 && bottom>=-20000 && right<=20000 && bottom<=20000) {
                     m_settings.setValue(settingsPrefix(id)+"right",right);m_settings.setValue(settingsPrefix(id)+"bottom",bottom);
                     syncSettings();
                 }

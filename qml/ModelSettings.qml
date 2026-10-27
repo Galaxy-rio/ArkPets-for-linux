@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import md3.Core as MD
+import ArkPets 1.0
 
 ColumnLayout {
     id: page
@@ -72,6 +73,10 @@ ColumnLayout {
         Layout.fillWidth: true; Layout.fillHeight: true
         contentWidth: width; contentHeight: content.implicitHeight
         boundsBehavior: Flickable.StopAtBounds; clip: true
+        ListWheelHandler {
+            objectName: "individualSettingsWheelHandler"
+            parent: scroll; anchors.fill: parent; z: 1; target: scroll
+        }
         MD.ScrollBar {parent: scroll; target: scroll; anchors.right: parent.right; height: parent.height; z: 2}
         ColumnLayout {
             id: content
@@ -79,7 +84,7 @@ ColumnLayout {
             MdText {text: "显示"; role: "titleMedium"; color: MD.Theme.color.primary}
             RowLayout {
                 Layout.fillWidth: true; spacing: 20
-                MdText {text: "高度倍率"; role: "bodyLarge"; Layout.preferredWidth: 112}
+                MdText {text: "相对缩放倍率"; role: "bodyLarge"; Layout.preferredWidth: 112}
                 MD.Slider {
                     id: multiplierSlider; objectName: "multiplierSlider"
                     Layout.fillWidth: true; from: 0.25; to: 2.5; stepSize: 0.05

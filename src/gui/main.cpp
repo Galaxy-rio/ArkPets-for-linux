@@ -43,7 +43,7 @@ int main(int argc,char** argv) {
     qmlRegisterType<ListWheelHandler>("ArkPets", 1, 0, "ListWheelHandler");
     QApplication app(argc,argv);
     app.setApplicationName("ArkPets"); app.setOrganizationName("ArkPets");
-    app.setApplicationVersion("0.9.0"); app.setDesktopFileName("arkpets");
+    app.setApplicationVersion("0.9.6"); app.setDesktopFileName("arkpets");
     QImageReader::setAllocationLimit(128);
     QCommandLineParser parser;parser.setApplicationDescription("ArkPets Linux · Material 桌宠管理器");
     parser.addHelpOption();parser.addVersionOption();

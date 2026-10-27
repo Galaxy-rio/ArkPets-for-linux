@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import md3.Core as MD
+import ArkPets 1.0
 
 Flickable {
     id: page
@@ -10,6 +11,10 @@ Flickable {
     contentWidth: width
     contentHeight: content.implicitHeight + 8
     boundsBehavior: Flickable.StopAtBounds
+    ListWheelHandler {
+        objectName: "panelSettingsWheelHandler"
+        parent: page; anchors.fill: parent; z: 1; target: page
+    }
     MD.ScrollBar {parent: page; target: page; anchors.right: parent.right; height: parent.height; z: 2}
     ColumnLayout {
         id: content

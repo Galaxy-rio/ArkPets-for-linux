@@ -68,6 +68,7 @@ public:
     bool paused() const { return m_paused; }
     double right() const { return m_right; }
     double remaining() const { return m_remaining; }
+    void setRight(double right) { m_right = right; }
 
     void pause() {
         m_paused = true;
@@ -82,24 +83,24 @@ public:
 
     // Returns whether an activity ended. Any number of elapsed state boundaries
     // is handled, so 15 FPS and 120 FPS follow the same trajectory for one seed.
-    bool advance(double elapsed, double maximumRight, double speed) {
-        maximumRight = std::max(0.0, maximumRight);
-        m_right = std::clamp(m_right, 0.0, maximumRight);
+    bool advance(double elapsed, double maximumRight, double speed, double minimumRight = 0) {
+        maximumRight = std::max(minimumRight, maximumRight);
+        m_right = std::clamp(m_right, minimumRight, maximumRight);
         if (m_paused || !std::isfinite(elapsed) || elapsed <= 0) return false;
         bool changed = false;
         while (elapsed > 1e-9) {
             double step = std::min(elapsed, m_remaining);
-            if (walking() && maximumRight > 0) {
+            if (walking() && maximumRight > minimumRight) {
                 m_right += m_direction * std::max(0.0, speed) * step;
-                while (m_right < 0 || m_right > maximumRight) {
-                    if (m_right < 0) { m_right = -m_right; m_direction = 1; }
+                while (m_right < minimumRight || m_right > maximumRight) {
+                    if (m_right < minimumRight) { m_right = 2*minimumRight-m_right; m_direction = 1; }
                     if (m_right > maximumRight) { m_right = 2*maximumRight-m_right; m_direction = -1; }
                 }
             }
             elapsed -= step;
             m_remaining -= step;
             if (m_remaining < 1e-9) {
-                chooseNext(maximumRight);
+                chooseNext(minimumRight, maximumRight);
                 changed = true;
             }
         }
@@ -117,17 +118,17 @@ private:
     double randomDuration(double min, double max) {
         return std::uniform_real_distribution<double>(min, max)(m_random);
     }
-    void chooseNext(double maximumRight) {
+    void chooseNext(double minimumRight, double maximumRight) {
         auto walk = std::find_if(m_plan.begin(), m_plan.end(), [](const auto& a) {
             return a.kind == ActivityKind::Walk;
         });
-        if (m_firstWalk && walk != m_plan.end() && maximumRight > 0) {
+        if (m_firstWalk && walk != m_plan.end() && maximumRight > minimumRight) {
             m_current = static_cast<std::size_t>(walk-m_plan.begin());
         } else {
             std::vector<double> weights;
             for (std::size_t i = 0; i < m_plan.size(); ++i) {
                 bool allowed = (i != m_current || m_plan.size() == 1) &&
-                    (m_plan[i].kind != ActivityKind::Walk || maximumRight > 0);
+                    (m_plan[i].kind != ActivityKind::Walk || maximumRight > minimumRight);
                 weights.push_back(allowed ? m_plan[i].weight : 0);
             }
             if (std::any_of(weights.begin(), weights.end(), [](double w) {return w > 0;}))
@@ -139,7 +140,7 @@ private:
         m_remaining = randomDuration(activity.minimum, activity.maximum);
         if (activity.kind == ActivityKind::Walk) {
             m_direction = std::uniform_int_distribution<int>(0, 1)(m_random) ? 1 : -1;
-            if (m_right < 1) m_direction = 1;
+            if (m_right < minimumRight+1) m_direction = 1;
             if (m_right > maximumRight-1) m_direction = -1;
         }
     }
