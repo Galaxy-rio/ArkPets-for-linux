@@ -73,6 +73,15 @@ Controller::Controller(QString root, QString config, QUrl base, QObject* parent)
         if (!m_settings.contains("scale")) m_settings.setValue("scale",1.0);
         m_settings.remove("size");syncSettings();
     }
+    // The new 1x is the previous 2x. Convert explicitly saved speeds once;
+    // profiles without a saved value use the new default.
+    if (m_settings.value("moveSpeedSchema",0).toInt() < 1) {
+        if (m_settings.contains("moveSpeed")) {
+            const double previous=m_settings.value("moveSpeed").toDouble();
+            m_settings.setValue("moveSpeed",std::isfinite(previous) && previous>=.1 && previous<=3 ? previous/2 : 1.0);
+        }
+        m_settings.setValue("moveSpeedSchema",1);syncSettings();
+    }
 }
 Controller::~Controller() {
     m_destroying = true;
@@ -100,7 +109,9 @@ QVariantMap Controller::preferences() const {
     // INI values may reload as strings. Export stable types to QML so the string
     // "false" never becomes a truthy switch value after restarting the app.
     const double scale=m_settings.value("scale",1.0).toDouble();
+    const double moveSpeed=m_settings.value("moveSpeed",1.0).toDouble();
     return {{"scale",std::isfinite(scale)?std::clamp(scale,.25,2.5):1.0},{"fps",m_settings.value("fps",30).toInt()},
+            {"moveSpeed",std::isfinite(moveSpeed)?std::clamp(moveSpeed,.05,3.0):1.0},
             {"monitor",m_settings.value("monitor",QString()).toString()},{"layer",m_settings.value("layer","top").toString()},
             {"clickThrough",m_settings.value("clickThrough",false).toBool()},{"flip",m_settings.value("flip",false).toBool()},
             {"autoActivity",m_settings.value("autoActivity",false).toBool()},
@@ -457,6 +468,7 @@ void Controller::launch(const QString& id) {
     if (!syncSettings()) return;
     QStringList args{"--model",m_catalog.modelPath(id),"--animation",animation,"--namespace",petNamespace(id),
         "--scale",QString::number(p["scale"].toDouble(),'g',15),"--fps",p["fps"].toString(),"--layer",p["layer"].toString(),
+        "--move-speed",QString::number(p["moveSpeed"].toDouble(),'g',15),
         "--right",p["right"].toString(),"--bottom",p["bottom"].toString()};
     QString monitor=p["monitor"].toString();
     if (monitor.isEmpty() || !m_monitors.contains(monitor)) {
@@ -518,13 +530,15 @@ void Controller::savePreferences(const QVariantMap& values) {
     if (values.contains("gravity") && !values["gravity"].toBool() && !values.value("windowEdges",false).toBool()) next["windowEdges"]=false;
     if (next["windowEdges"].toBool()) next["gravity"]=true;
     const double scale=next["scale"].toDouble();
+    const double moveSpeed=next["moveSpeed"].toDouble();
     const int fps=next["fps"].toInt();
-    if (!std::isfinite(scale) || scale<.25 || scale>2.5 || fps<1 || fps>120 || !QStringList{"top","bottom","overlay"}.contains(next["layer"].toString())) {
+    if (!std::isfinite(scale) || scale<.25 || scale>2.5 || !std::isfinite(moveSpeed) || moveSpeed<.05 || moveSpeed>3 ||
+        fps<1 || fps>120 || !QStringList{"top","bottom","overlay"}.contains(next["layer"].toString())) {
         fail("设置值超出允许范围。");return;
     }
     QMap<QString,QVariantMap> before;
     for (const auto& value:pets()) {QString id=value.toMap()["id"].toString();before[id]=effectivePreferences(id);}
-    for (const auto* key:{"scale","fps","monitor","layer","clickThrough","flip","autoActivity","gravity","windowEdges","trackMovingWindows"}) m_settings.setValue(key,next[key]);
+    for (const auto* key:{"scale","fps","moveSpeed","monitor","layer","clickThrough","flip","autoActivity","gravity","windowEdges","trackMovingWindows"}) m_settings.setValue(key,next[key]);
     if (!syncSettings()) return;
     clearError();emit preferencesChanged();notifyPets();m_status="通用设置已保存";emit activityChanged();
     for (auto i=before.cbegin();i!=before.cend();++i) if (i.value()!=effectivePreferences(i.key())) restartPet(i.key());

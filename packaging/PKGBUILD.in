@@ -1,6 +1,6 @@
 # Generated with packaging/release.sh; the adjacent source archive is required.
 pkgname=arkpets-linux
-pkgver=0.9.6
+pkgver=0.9.10
 pkgrel=1
 pkgdesc='Material desktop-pet manager and transparent Hyprland layer-shell renderer'
 arch=('x86_64')

@@ -2,7 +2,7 @@
 set -euo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 release_dir="$root/outputs"
-version=0.9.6
+version=0.9.10
 mkdir -p "$release_dir"
 archive="$release_dir/arkpets-linux-$version.tar.gz"
 # Explicit allowlist: downloaded models, caches, old prototypes and binaries stay out.

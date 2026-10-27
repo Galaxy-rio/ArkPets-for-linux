@@ -661,7 +661,8 @@ private slots:
     void settingsPersistAndValidate() {
         QTemporaryDir dir;
         {Controller c(dir.path()+"/data",dir.path()+"/config");
-            c.savePreferences({{"scale",1.04},{"fps",60},{"autoActivity",true},{"clickThrough",true},{"flip",true},{"monitor","DP-4"},{"layer","bottom"}});
+            QCOMPARE(c.preferences()["moveSpeed"].toDouble(),1.0);
+            c.savePreferences({{"scale",1.04},{"fps",60},{"moveSpeed",1.35},{"autoActivity",true},{"clickThrough",true},{"flip",true},{"monitor","DP-4"},{"layer","bottom"}});
             QVERIFY(c.error().isEmpty());
             for (double invalid:{0.0,.249,2.501,std::numeric_limits<double>::infinity(),std::numeric_limits<double>::quiet_NaN()}) {
                 c.savePreferences({{"scale",invalid},{"fps",60}});QVERIFY(!c.error().isEmpty());
@@ -670,9 +671,19 @@ private slots:
         }
         Controller restored(dir.path()+"/data",dir.path()+"/config");
         QCOMPARE(restored.preferences()["scale"].toDouble(),1.04);QCOMPARE(restored.preferences()["fps"].toInt(),60);
+        QCOMPARE(restored.preferences()["moveSpeed"].toDouble(),1.35);
         QVERIFY(restored.preferences()["clickThrough"].toBool());QCOMPARE(restored.preferences()["layer"].toString(),QString("bottom"));
         QVERIFY(restored.preferences()["autoActivity"].toBool());
         QCOMPARE(restored.downloadedCount(),0);
+        // Rebase saved speeds once, including the old minimum and fine input.
+        for(double previous:{.1,.15,2.0,3.0}) {
+            QTemporaryDir legacy;QDir().mkpath(legacy.path()+"/config");
+            {QSettings ini(legacy.path()+"/config/settings.ini",QSettings::IniFormat);ini.setValue("moveSpeed",previous);ini.sync();}
+            {Controller migrated(legacy.path()+"/data",legacy.path()+"/config");
+                QCOMPARE(migrated.preferences()["moveSpeed"].toDouble(),previous/2);}
+            Controller reopened(legacy.path()+"/data",legacy.path()+"/config");
+            QCOMPARE(reopened.preferences()["moveSpeed"].toDouble(),previous/2);
+        }
     }
     void legacyHeightRetiredWithoutChangingRelativeSettings() {
         for (bool hasScale:{false,true}) {

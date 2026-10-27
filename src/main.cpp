@@ -59,7 +59,7 @@ struct Options {
     fs::path model, capture;
     std::string animation = "Relax", monitor, layer = "top", ns = "arkpets-hyprland";
     int fps = 30, right = 64, bottom = 40;
-    double scale = 1, duration = 0;
+    double scale = 1, moveSpeed = 1, duration = 0;
     bool list = false, flip = false, straightAlpha = false, clickThrough = false, autoActivity = false;
     bool gravity = false, windowEdges = false;
     std::optional<std::uint32_t> activitySeed, interactionSeed;
@@ -111,6 +111,12 @@ static Options arguments(int argc, char** argv) {
             if (used != v.size() || !std::isfinite(o.scale) || o.scale < .0625 || o.scale > 6.25)
                 throw std::runtime_error("scale 必须是 0.0625 到 6.25 之间的倍率");
         }
+        else if (key == "--move-speed") {
+            std::string v = value(); size_t used = 0;
+            o.moveSpeed = std::stod(v, &used);
+            if (used != v.size() || !std::isfinite(o.moveSpeed) || o.moveSpeed < .05 || o.moveSpeed > 3)
+                throw std::runtime_error("move-speed 必须是 0.05 到 3 之间的倍率");
+        }
         else if (key == "--fps") o.fps = integer(value(), 1, 120);
         else if (key == "--right") o.right = integer(value(), -20000, 20000);
         else if (key == "--bottom") o.bottom = integer(value(), -20000, 20000);
@@ -143,6 +149,7 @@ static Options arguments(int argc, char** argv) {
                 "  --straight-alpha     仅用于不是 PMA 的旧纹理；Ark-Models 默认 PMA\n"
                 "  --click-through      鼠标穿透；默认左键点击互动、按住拖动\n"
                 "  --auto-activity      自动走动，随机切换待机、坐下和睡觉\n"
+                "  --move-speed 1       移动速度倍率，范围 0.05 到 3\n"
                 "  --gravity            启用重力，松开角色后落到支撑面\n"
                 "  --window-edges       接收管理进程提供的窗口边缘（标准输入），同时开启重力\n"
                 "  --activity-seed N    固定随机种子，用于复现活动测试\n"
@@ -459,7 +466,7 @@ public:
         if (!activity || dragging || interacting || (o.gravity && !body.grounded())) return;
         bool wasWalking = activity->walking();
         auto limits = walkingLimits();
-        bool changed = activity->advance(elapsed, limits.maxRight, std::clamp(72.0*o.scale, 24.0, 100.0), limits.minRight);
+        bool changed = activity->advance(elapsed, limits.maxRight, o.moveSpeed * 2 * std::clamp(72.0*o.scale, 24.0, 100.0), limits.minRight);
         const int previousRight=o.right;
         o.right=static_cast<int>(std::lround(activity->right()));
         const double center=bodyCenterAtZero()-activity->right();

@@ -14,7 +14,7 @@
       "spine-c/LICENSE"
     ]
   },
-  "version": "0.9.6",
+  "version": "0.9.10",
   "material_components": {
     "repository": "https://github.com/sudoevolve/material-components-qml",
     "revision": "900a537824812bb592a761a0fd0b301422bd1a79",

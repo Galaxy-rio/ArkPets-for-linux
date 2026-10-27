@@ -23,6 +23,7 @@ Window {
     property string kindFilter: "Operator"
     property real draftScale: 1
     property int draftFps: 30
+    property real draftMoveSpeed: 1
     property bool draftAutoActivity: false
     property bool draftGravity: false
     property bool draftWindowEdges: false
@@ -62,6 +63,7 @@ Window {
     function loadPreferences() {
         let p = backend.preferences
         draftScale = p.scale; draftFps = p.fps
+        draftMoveSpeed = p.moveSpeed
         draftAutoActivity = !!p.autoActivity
         draftGravity = !!p.gravity
         draftWindowEdges = !!p.windowEdges
@@ -69,14 +71,15 @@ Window {
         draftClickThrough = p.clickThrough; draftFlip = p.flip
         draftMonitor = p.monitor; draftLayer = p.layer
         scaleField.text = String(draftScale); fpsField.text = String(draftFps)
+        moveSpeedField.text = String(draftMoveSpeed)
     }
     function applyFilter() {
         backend.setFilter(search.text, currentPage === "downloaded" ? "" : kindFilter,
                           currentPage === "downloaded")
     }
     function saveSettings() {
-        scaleField.commit(); fpsField.commit()
-        backend.savePreferences({scale: draftScale, fps: draftFps, autoActivity: draftAutoActivity,
+        scaleField.commit(); fpsField.commit(); moveSpeedField.commit()
+        backend.savePreferences({scale: draftScale, fps: draftFps, moveSpeed: draftMoveSpeed, autoActivity: draftAutoActivity,
                                  gravity: draftGravity, windowEdges: draftWindowEdges, trackMovingWindows: draftTrackMovingWindows,
                                  monitor: draftMonitor, layer: draftLayer,
                                  clickThrough: draftClickThrough, flip: draftFlip})
@@ -434,6 +437,25 @@ Window {
                         Accessible.name: "自动活动"
                         Binding {target: autoActivitySwitch; property: "checked"; value: root.draftAutoActivity}
                         onClicked: root.draftAutoActivity = checked
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 24
+                    MdText {text: "移动速度"; role: "bodyLarge"; Layout.preferredWidth: 112}
+                    MD.Slider {
+                        id: moveSpeedSlider; objectName: "moveSpeedSlider"
+                        Layout.fillWidth: true
+                        from: 0.05; to: 3; stepSize: 0.05
+                        Binding {target: moveSpeedSlider; property: "value"; value: root.draftMoveSpeed}
+                        onPressedChanged: if (pressed) forceActiveFocus()
+                        onMoved: root.draftMoveSpeed = Math.round(value * 100) / 100
+                    }
+                    MultiplierField {
+                        id: moveSpeedField; objectName: "moveSpeedField"
+                        Layout.preferredWidth: 128
+                        from: 0.05; to: 3; decimals: 3
+                        Binding {target: moveSpeedField; property: "value"; value: root.draftMoveSpeed}
+                        onValueModified: function(value) {root.draftMoveSpeed = value}
                     }
                 }
                 RowLayout {
